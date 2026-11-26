@@ -128,6 +128,7 @@ pub struct VaeQi {
 impl VaeQi {
     pub fn load(path: &str, dev: &Device) -> Result<Self> {
         let wt = Weights::open(path)?;
+        wt.prefetch_where(|_| true);
         let d = "decoder";
         let mut ups = vec![];
         for i in 0..4 {

@@ -128,6 +128,10 @@ impl BlockStream {
             HostMemory::Staged => false,
             HostMemory::Auto => hot && free_ram_bytes() > 2 * bytes * n + (8 << 30),
         };
+        // read ahead in the order the bytes are needed: pinned reads the stack now and the rest after it; staged
+        // loads the rest now and reads the stack at the first run
+        let streamed: std::collections::HashSet<String> = blocks.iter().flat_map(|b| linears.iter().map(move |l| format!("{b}.{l}.weight"))).collect();
+        let rest = wt.ranges_where(|k| !streamed.contains(k));
         let mut host_bufs = Vec::with_capacity(n);
         if pinned {
             for _ in blocks {
@@ -146,25 +150,34 @@ impl BlockStream {
         let host = if pinned {
             let host = host_bufs;
             let ptrs: Vec<usize> = host.iter().map(|h| h.as_ptr().map(|p| p as usize)).collect::<std::result::Result<_, _>>()?;
-            // fill in parallel straight from the memory-mapped file (first touch reads the disk)
+            // read the file straight into the locked buffers, block by block in run order: large reads at the drive's
+            // speed, and the checkpoint is not also mapped into this process (32 GB machines thrash on the double copy)
+            let next = std::sync::atomic::AtomicUsize::new(0);
             std::thread::scope(|s| -> Result<()> {
-                let mut hs = vec![];
-                for (k, b) in blocks.iter().enumerate() {
-                    let (order, hp) = (&order, ptrs[k]);
-                    hs.push(s.spawn(move || -> Result<()> {
-                        let dst = unsafe { std::slice::from_raw_parts_mut(hp as *mut u8, bytes) };
-                        for (l, o, len) in order {
-                            let (src, _) = wt.bytes(&format!("{b}.{l}.weight"))?;
-                            dst[*o..*o + len].copy_from_slice(&src[..*len]);
-                        }
-                        Ok(())
-                    }));
-                }
+                let hs: Vec<_> = (0..STAGE_THREADS.min(n))
+                    .map(|_| {
+                        s.spawn(|| -> Result<()> {
+                            let f = std::fs::File::open(path)?;
+                            loop {
+                                let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                let Some(b) = blocks.get(k) else { return Ok(()) };
+                                let dst = unsafe { std::slice::from_raw_parts_mut(ptrs[k] as *mut u8, bytes) };
+                                for (l, o, len) in &order {
+                                    crate::core::check_abort()?;
+                                    let (s0, _) = wt.file_range(&format!("{b}.{l}.weight"))?;
+                                    crate::core::weights::read_at(&f, &mut dst[*o..*o + len], s0 as u64)?;
+                                    crate::core::weights::count_read(*len);
+                                }
+                            }
+                        })
+                    })
+                    .collect();
                 for h in hs {
                     h.join().map_err(|_| anyhow::anyhow!("stream: fill thread panicked"))??;
                 }
                 Ok(())
             })?;
+            crate::core::weights::prefetch(path, rest);
             Host::Pinned(host)
         } else {
             let map = unsafe { memmap2::Mmap::map(&std::fs::File::open(path)?)? };
@@ -180,20 +193,7 @@ impl BlockStream {
                 }
                 src.push(v);
             }
-            // warm the OS file cache in the background, in run order, so the first run does not wait on the disk
-            // (a cold SATA SSD reads ~0.5 GB/s); best effort, the reads are shared with the staging copies
-            let ranges: Vec<(usize, usize)> = src.iter().flatten().map(|&(f, _, n)| (f, n)).collect();
-            let wpath = path.to_path_buf();
-            std::thread::spawn(move || {
-                let Ok(m) = std::fs::File::open(&wpath).and_then(|f| unsafe { memmap2::Mmap::map(&f) }) else { return };
-                let mut sum = 0u8;
-                for (f, n) in ranges {
-                    for i in (f..f + n).step_by(4096) {
-                        sum = sum.wrapping_add(m[i]);
-                    }
-                }
-                std::hint::black_box(sum);
-            });
+            crate::core::weights::prefetch(path, [rest, src.iter().flatten().map(|&(f, _, n)| (f, n)).collect()].concat());
             // page-locked but not write-combined: the CPU writes it every step
             let alloc = || unsafe { ctx.alloc_pinned_with_flags::<u8>(bytes, 0) };
             Host::Staged { map, stage: [alloc()?, alloc()?], src }
@@ -358,6 +358,7 @@ impl StreamedStack {
         hot: bool,
     ) -> Result<Option<Self>> {
         if !plan.stream {
+            wt.prefetch_where(|_| true); // all of it goes to the GPU now
             return Ok(None);
         }
         let first = plan.resident.min(prefixes.len());
