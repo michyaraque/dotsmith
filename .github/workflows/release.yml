@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  package:
+    name: Package for Windows
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag matches the app version
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path gpui/Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          if ("v$version" -ne "${{ github.ref_name }}") { throw "tag ${{ github.ref_name }} != gpui/Cargo.toml version $version" }
+
+      - uses: ./.github/actions/setup-toolchain
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Package
+        shell: pwsh
+        run: ./gpui/scripts/package.ps1
+
+      - name: Checksums and release notes
+        shell: pwsh
+        run: |
+          Get-ChildItem dist -File -Filter 'Dotsmith-*' | ForEach-Object {
+            "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)"
+          } | Set-Content dist/SHA256SUMS.txt
+          # this version's CHANGELOG section ("## [x.y.z]" up to the next "## ")
+          $version = '${{ github.ref_name }}'.TrimStart('v')
+          $notes = (Get-Content CHANGELOG.md -Raw) -split "(?m)^## " | Where-Object { $_ -match "^\[$([regex]::Escape($version))\]" } | Select-Object -First 1
+          if (-not $notes) { throw "CHANGELOG.md has no section for $version" }
+          ($notes -replace '^\[[^\]]+\][^\r\n]*\r?\n', '').Trim() | Set-Content dist/NOTES.md
+
+      - name: Draft the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          body_path: dist/NOTES.md
+          files: |
+            dist/Dotsmith-*-win64.zip
+            dist/Dotsmith-*-setup.exe
+            dist/SHA256SUMS.txt
