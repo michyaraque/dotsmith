@@ -54,3 +54,28 @@ pub fn tiled_encode(img: &Tensor, scale: usize, encode: impl Fn(&Tensor) -> Resu
     }
     Ok(Tensor::cat(&out_rows, 2)?.narrow(2, 0, h / scale)?.narrow(3, 0, w / scale)?)
 }
+
+/// Load phase timer, printed with DOTSMITH_STREAM_STATS: elapsed time and bytes read (core::weights) per phase.
+pub struct Phases {
+    what: &'static str,
+    on: bool,
+    last: std::cell::Cell<(std::time::Instant, u64)>,
+}
+
+impl Phases {
+    pub fn start(what: &'static str) -> Self {
+        let on = std::env::var("DOTSMITH_STREAM_STATS").is_ok();
+        Self { what, on, last: std::cell::Cell::new((std::time::Instant::now(), crate::core::weights::bytes_read())) }
+    }
+
+    pub fn mark(&self, phase: &str) {
+        if !self.on {
+            return;
+        }
+        let (t, b) = self.last.get();
+        let now = (std::time::Instant::now(), crate::core::weights::bytes_read());
+        let (s, mb) = (t.elapsed().as_secs_f64(), (now.1 - b) >> 20);
+        eprintln!("{}: {phase} {s:.1} s, {mb} MB read ({:.0} MB/s)", self.what, mb as f64 / s.max(1e-3));
+        self.last.set(now);
+    }
+}

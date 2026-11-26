@@ -57,11 +57,15 @@ impl Krea2 {
     pub fn load(paths: ModelPaths, variant: Variant, dev: &Device) -> Result<Self> {
         crate::core::memory::clear_report();
         let plan = Self::plan(&paths, variant, dev)?;
+        let t = crate::core::util::Phases::start("krea2 load");
         let te = TextEncoder::load_planned(&paths.text_encoder, &paths.tokenizer, dev, plan.1)?;
+        t.mark("text encoder");
         // low VRAM: the DiT loads in begin(), after the prompts are encoded and the text encoder has left the GPU.
         // A streamed DiT (~1-2 GB of VRAM) loads now and stays: dropping it would re-read gigabytes per prompt
         let dit = if crate::core::low_vram() && !plan.0.stream { None } else { Some(Krea::load_planned(paths.checkpoint(variant), dev, plan.0)?) };
+        t.mark("dit");
         let vae = VaeQi::load(&paths.vae, dev)?;
+        t.mark("vae");
         Ok(Self { dev: dev.clone(), paths, variant, te: Some(te), dit, vae, enc: None, lora: None, text: None, plan })
     }
 
