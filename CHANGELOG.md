@@ -2,6 +2,13 @@
 
 All notable changes to Dotsmith. The format follows [Keep a Changelog](https://keepachangelog.com) and versions follow [SemVer](https://semver.org).
 
+## [1.2.1] - 2026-11-26
+
+### Fixed
+- Opening `uninstall.exe` directly uninstalls Dotsmith instead of reporting a damaged installer.
+- Close, Finish and the title bar's close button close the setup window.
+- The setup screens use standard installer wording.
+
 ## [1.2.0] - 2026-11-26
 
 Dotsmith installs with its own setup program, in its own look.
