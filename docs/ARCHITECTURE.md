@@ -27,6 +27,7 @@ Dotsmith is two Rust crates in one process: a GPUI interface and a candle + CUDA
 | `gpui/src/i18n.rs` | `tr!("es", "en")` and the language choice |
 | `gpui/src/log.rs` | `%LOCALAPPDATA%\Dotsmith\logs\dotsmith.log` and the panic hook |
 | `gpui/src/download.rs` | Resumable Hugging Face downloads on their own thread |
+| `gpui/src/update.rs` | New versions from GitHub releases: check, download, checksum, hand-over to Dotsmith Setup (`--update`) |
 | `gpui/src/hf.rs` | Live model cards from Hugging Face (stats, README, sizes, avatars), cached for a day |
 | `gpui/src/model_hub.rs` | The model manager and the downloads panel |
 | `gpui/src/welcome.rs` | The start screen: graphics card check and every base model with its download |
