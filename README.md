@@ -155,7 +155,7 @@ cargo test --workspace --release -- --ignored    # end to end on this machine's 
 | --- | --- |
 | Portable folder | `dist/Dotsmith/` |
 | Portable zip | `dist/Dotsmith-<version>-win64.zip` |
-| Installer (needs [Inno Setup 6](https://jrsoftware.org/isinfo.php)) | `dist/Dotsmith-<version>-setup.exe` |
+| Installer | `dist/Dotsmith-<version>-setup.exe` |
 
 ## Further reading
 

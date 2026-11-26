@@ -34,7 +34,7 @@ Dotsmith is two Rust crates in one process: a GPUI interface and a candle + CUDA
 | `gpui/src/aurora.rs` | The live preview: a drifting gradient of the step's colours that gives way to the image as it takes shape |
 | `gpui/src/rig.rs`, `anim.rs`, `pack_split.rs`, `pixels.rs`, `clipboard.rs`, `input.rs` | Self-contained helpers |
 | `gpui/scripts/package.ps1` | Assembles the release: exe, CUDA and VC runtimes, docs, zip and installer |
-| `gpui/installer/dotsmith.iss` | Inno Setup installer |
+| `installer/` | Dotsmith Setup (`dotsmith-setup`): the GPUI installer and uninstaller, per user with no admin rights; the app's files ride zstd-packed behind it |
 | `engine/` | Inference library (`dotsmith_engine`) and a developer CLI (`dotsmith-engine.exe`) |
 | `engine/src/engine.rs` | Generation loop: CFG, Euler steps, SDEdit, masks, previews |
 | `engine/models.json` | The model catalog: files, download sources and defaults of every family (merged with `%APPDATA%\Dotsmith\models.json`) |
