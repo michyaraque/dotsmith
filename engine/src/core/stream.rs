@@ -121,11 +121,12 @@ impl BlockStream {
         let n = blocks.len();
         use crate::core::memory::HostMemory;
         let want = crate::core::memory::policy().host;
-        // pinned needs the whole packed stack locked in RAM; keep 6 GB for the OS, the app and the rest
+        // pinned locks the whole packed stack in RAM, and filling it reads the same bytes through the file cache: Auto
+        // only pins with room for both plus 8 GB (a 32 GB laptop pinning a 12 GB stack thrashes instead)
         let mut pinned = match want {
             HostMemory::Pinned => true,
             HostMemory::Staged => false,
-            HostMemory::Auto => hot && free_ram_bytes() > bytes * n + (6 << 30),
+            HostMemory::Auto => hot && free_ram_bytes() > 2 * bytes * n + (8 << 30),
         };
         let mut host_bufs = Vec::with_capacity(n);
         if pinned {
