@@ -21,7 +21,7 @@ unicode-segmentation = "1.12"
 anyhow = "1"
 raw-window-handle = "0.6"
 dotsmith-engine = { path = "../engine" }
-ureq = { version = "2", features = ["json"] }
+ureq = { version = "3", features = ["json"] }
 
 [build-dependencies]
 embed-resource = "3.0.12"
