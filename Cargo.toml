@@ -1,0 +1,15 @@
+[workspace]
+resolver = "3"
+members = ["engine"]
+
+[workspace.package]
+authors = ["Michael Araque"]
+edition = "2024"
+license = "MIT"
+homepage = "https://github.com/michyaraque"
+repository = "https://github.com/michyaraque/dotsmith"
+publish = false
+
+[workspace.lints.clippy]
+# per-pixel and per-channel loops read better with the index
+needless_range_loop = "allow"
