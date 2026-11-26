@@ -2,7 +2,9 @@
 
 All notable changes to Dotsmith. The format follows [Keep a Changelog](https://keepachangelog.com) and versions follow [SemVer](https://semver.org).
 
-## [Unreleased]
+## [1.3.0] - 2026-11-27
+
+Dotsmith updates itself from now on.
 
 ### Added
 - **Updates from inside the app**: Dotsmith looks for a new release at start and every 12 hours, shows "Update to X" in the title bar and in Settings > About, downloads the installer for your build (standard or legacy), checks it against the release's checksums, and restarts into Dotsmith Setup, which installs it and opens Dotsmith again. The automatic check can be turned off in Settings > About; portable copies open the release page instead.
