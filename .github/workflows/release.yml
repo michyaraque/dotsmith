@@ -72,9 +72,6 @@ jobs:
           $shim = "$env:GITHUB_WORKSPACE/engine/cuda/pascal.cuh" -replace '\\', '/'
           "NVCC_APPEND_FLAGS=--pre-include $shim" >> $env:GITHUB_ENV
 
-      - name: Install Inno Setup
-        run: choco install innosetup --no-progress -y
-
       - name: Package
         shell: pwsh
         run: ./gpui/scripts/package.ps1 -Suffix '${{ matrix.suffix }}'

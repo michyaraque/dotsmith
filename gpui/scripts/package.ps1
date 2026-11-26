@@ -1,7 +1,7 @@
 # Builds Dotsmith and assembles a self-contained Windows release in dist\ at the repository root:
 #   dist\Dotsmith\                         dotsmith.exe + CUDA runtime + VC runtime + docs
 #   dist\Dotsmith-<ver><suffix>-win64.zip  portable build
-#   dist\Dotsmith-<ver><suffix>-setup.exe  installer (only when Inno Setup 6 is installed)
+#   dist\Dotsmith-<ver><suffix>-setup.exe  installer (installer\: Dotsmith Setup with the portable folder packed behind it)
 # The CUDA runtime is taken from CUDA_PATH, the toolkit the build used; CARGO_TARGET_DIR picks a separate build.
 param([switch]$SkipBuild, [string]$Suffix = '')
 $ErrorActionPreference = 'Stop'
@@ -15,7 +15,7 @@ $out = Join-Path $dist 'Dotsmith'
 
 if (-not $SkipBuild) {
     Push-Location $repo
-    cargo build --release -p dotsmith
+    cargo build --release -p dotsmith -p dotsmith-setup
     if ($LASTEXITCODE -ne 0) { Pop-Location; throw 'cargo build failed' }
     Pop-Location
 }
@@ -51,11 +51,10 @@ if (Test-Path $zip) { Remove-Item -Force $zip }
 Compress-Archive -Path $out -DestinationPath $zip -CompressionLevel Optimal
 Write-Host "portable: $zip"
 
-$iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe", "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
-if ($iscc) {
-    & $iscc "/DAppVersion=$version" "/DSourceDir=$out" "/O$dist" "/FDotsmith-$version$Suffix-setup" "$root\installer\dotsmith.iss"
-    if ($LASTEXITCODE -ne 0) { throw 'installer build failed' }
-    Write-Host "installer: $dist\Dotsmith-$version$Suffix-setup.exe"
-} else {
-    Write-Host 'Inno Setup 6 not found: skipped the installer (https://jrsoftware.org/isinfo.php)'
-}
+$setup = Join-Path $dist "Dotsmith-$version$Suffix-setup.exe"
+$err = Join-Path $dist 'setup-pack.log'
+# a windowed program: Start-Process waits for it and gives its exit code
+$p = Start-Process -FilePath (Join-Path $target 'release\dotsmith-setup.exe') -ArgumentList '--pack', "`"$out`"", "`"$setup`"" -Wait -PassThru -NoNewWindow -RedirectStandardError $err
+if ($p.ExitCode -ne 0) { throw "installer build failed: $(Get-Content $err -Raw)" }
+Remove-Item $err
+Write-Host "installer: $setup"
