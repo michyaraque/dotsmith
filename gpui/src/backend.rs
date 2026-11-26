@@ -94,11 +94,13 @@ pub struct Folders {
 }
 
 pub struct Backend {
-    tx: Mutex<Option<Sender<Cmd>>>,
+    tx: Arc<Mutex<Option<Sender<Cmd>>>>,
     queue: Arc<Mutex<Vec<Msg>>>,
     live: Arc<Mutex<Live>>,
     seq: std::sync::atomic::AtomicU64,
     cancel: Arc<AtomicBool>,
+    /// the LoRA library the folder watcher looks at (crate::watch)
+    library: Arc<Mutex<Option<PathBuf>>>,
     pub log: PathBuf,
 }
 
@@ -525,6 +527,7 @@ impl Backend {
             (ModelKind::new(f, Variant::Base).label(), newest_lora(&runs, f).unwrap_or_default())
         });
         let live: Arc<Mutex<Live>> = Arc::default();
+        let library = Arc::new(Mutex::new(folders.library.clone()));
         let mut w =
             Worker { folders, engine: None, base, lora, lora_scale: 1.0, phase: "off", queue: queue.clone(), live: live.clone(), cancel: cancel.clone() };
         let q = queue.clone();
@@ -567,7 +570,11 @@ impl Backend {
             })
             .map_err(|e| e.to_string())?;
         let log = crate::log::path();
-        Ok(Arc::new(Backend { tx: Mutex::new(Some(tx)), queue, live, seq: Default::default(), cancel, log }))
+        // the watcher sends through the same handle as the UI, so shutdown (which drops it) also stops the watcher
+        let tx = Arc::new(Mutex::new(Some(tx)));
+        let watch_tx = tx.clone();
+        crate::watch::spawn(library.clone(), move || watch_tx.lock().unwrap().as_ref().is_some_and(|t| t.send(Cmd::State).is_ok()));
+        Ok(Arc::new(Backend { tx, queue, live, seq: Default::default(), cancel, library, log }))
     }
 
     /// The same JSON commands the UI always sent; `stop` acts at once (atomic flag, checked every step).
@@ -599,6 +606,7 @@ impl Backend {
     }
 
     pub fn configure(&self, f: Folders) {
+        *self.library.lock().unwrap() = f.library.clone();
         if let Some(tx) = self.tx.lock().unwrap().as_ref() {
             let _ = tx.send(Cmd::Configure(f));
         }

@@ -18,6 +18,7 @@ mod settings;
 mod studio;
 mod sysmon;
 mod theme;
+mod watch;
 
 use gpui::{App, AppContext, Application, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
 
