@@ -147,7 +147,10 @@ impl Weights {
         self.entries.contains_key(name)
     }
 
+    /// A tensor's bytes. Every weight read goes through here, so it is also where a load can be cancelled
+    /// (core::ABORT).
     pub fn bytes(&self, name: &str) -> Result<(&[u8], &Entry)> {
+        crate::core::check_abort()?;
         let e = self.entries.get(name).with_context(|| format!("missing tensor {name}"))?;
         READ.fetch_add((e.end - e.start) as u64, Ordering::Relaxed);
         Ok((&self.map[self.base + e.start..self.base + e.end], e))

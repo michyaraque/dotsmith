@@ -35,6 +35,18 @@ pub struct Live {
     pub queued: Option<(u64, String)>,
 }
 
+/// A load the user stopped (not an error to report).
+#[derive(Debug)]
+struct Cancelled;
+
+impl std::fmt::Display for Cancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", tr!("Carga cancelada.", "Load cancelled."))
+    }
+}
+
+impl std::error::Error for Cancelled {}
+
 /// A model going onto the GPU: progress is the weight bytes read since `start` against `expect` (the bytes the last
 /// load of the same kind read, else the size of its files).
 #[derive(Clone)]
@@ -191,6 +203,7 @@ impl Worker {
         let expect = load_bytes(key)
             .unwrap_or_else(|| ModelPaths::default_for(kind.family).map(|p| p.load_bytes(kind.variant, key.starts_with("dit:"))).unwrap_or(0) + lora);
         let what = model_label(&self.base, &self.lora);
+        dotsmith_engine::core::ABORT.store(false, Ordering::SeqCst);
         self.live.lock().unwrap().loading = Some(Loading { what, since: Instant::now(), start: bytes_read(), expect });
         self.set_phase("loading");
     }
@@ -228,6 +241,9 @@ impl Worker {
         self.end_load(&key, r.is_ok());
         if let Err(err) = r {
             self.engine = None; // whatever was on the GPU is gone or half replaced: start clean on the next load
+            if dotsmith_engine::core::ABORT.swap(false, Ordering::SeqCst) {
+                return Err(anyhow::Error::new(Cancelled));
+            }
             return Err(err);
         }
         self.event(json!({"ev": "toast", "level": "ok", "message": tr!(format!("{label} listo en GPU · {:.1} s", t.elapsed().as_secs_f64()), format!("{label} ready on the GPU · {:.1} s", t.elapsed().as_secs_f64()))}));
@@ -245,6 +261,7 @@ impl Worker {
                     self.event(json!({"ev": "toast", "level": "ok", "message": format!("{what} · {}", model_label(&self.base, &self.lora))}));
                 }
             }
+            Err(e) if e.is::<Cancelled>() => self.event(json!({"ev": "toast", "level": "info", "message": tr!("Carga cancelada.", "Load cancelled.")})),
             Err(e) => self.event(json!({"ev": "toast", "level": "error",
                 "message": tr!(format!("No se pudo cargar {}: {}", model_label(&self.base, &self.lora), explain(&e)), format!("Could not load {}: {}", model_label(&self.base, &self.lora), explain(&e)))})),
         }
@@ -348,6 +365,9 @@ impl Worker {
                     Ok(msg) => {
                         let status = if self.cancel.load(Ordering::SeqCst) { "stopped" } else { "done" };
                         self.event(json!({"ev": "done", "id": req["id"], "status": status, "message": msg}));
+                    }
+                    Err(e) if e.is::<Cancelled>() => {
+                        self.event(json!({"ev": "done", "id": req["id"], "status": "stopped", "message": e.to_string()}))
                     }
                     Err(e) => {
                         crate::log::error(&format!("generate {}: {e:#}", req["mode"]));
@@ -566,7 +586,9 @@ impl Backend {
             Some("prepare") => Cmd::Prepare(PathBuf::from(v["path"].as_str().unwrap_or(""))),
             Some("generate") => Cmd::Generate(v),
             Some("stop") => {
+                // a load in progress stops at its next weight read (engine::core::ABORT)
                 self.cancel.store(true, Ordering::SeqCst);
+                dotsmith_engine::core::ABORT.store(true, Ordering::SeqCst);
                 return;
             }
             _ => return,

@@ -720,6 +720,7 @@ impl Studio {
                                 .child(div().text_size(px(11.)).text_color(rgb(MUTED_2())).child(txt.clone())),
                         ),
                 )
+                .child(button("picker-cancel-load", tr!("Cancelar", "Cancel")).on_click(cx.listener(|this, _, _, cx| this.cancel_load(cx))))
                 .into_any_element(),
             (None, Some((_, label))) => div()
                 .flex_1()

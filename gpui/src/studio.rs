@@ -1172,10 +1172,19 @@ impl Studio {
             self.hub_open = false;
             self.downloads_open = false;
             cx.notify();
+        } else if self.activity.loading.is_some() {
+            self.cancel_load(cx);
         } else if self.running {
             self.send(json!({"cmd": "stop"}));
             self.say(tr!("Deteniendo en el siguiente paso…", "Stopping at the next step…"), Level::Info);
         }
+    }
+
+    /// Stops the model that is going onto the GPU at its next weight read.
+    fn cancel_load(&mut self, cx: &mut Context<Self>) {
+        self.send(json!({"cmd": "stop"}));
+        self.say(tr!("Cancelando la carga…", "Cancelling the load…"), Level::Info);
+        cx.notify();
     }
     fn paste_image(&mut self, _: &PasteImage, _: &mut Window, cx: &mut Context<Self>) {
         let Some(item) = cx.read_from_clipboard() else { return };
@@ -3574,6 +3583,11 @@ impl Studio {
                         .gap(px(6.))
                         .child(model_picker::progress_bar(frac, 220.))
                         .child(div().text_size(px(11.5)).text_color(rgb(MUTED_2())).child(txt))
+                        .child(
+                            div()
+                                .pt(px(6.))
+                                .child(button("cancel-load", tr!("Cancelar", "Cancel")).on_click(cx.listener(|this, _, _, cx| this.cancel_load(cx)))),
+                        )
                 }))
                 .into_any_element()
         } else {
