@@ -35,8 +35,44 @@ pub struct Progress {
     /// The batch: (name, bytes) in download order.
     pub items: Vec<(String, u64)>,
     pub history: Vec<Finished>,
-    /// Set once when the batch ends: Ok(files) or Err(message). Taken by the UI.
-    pub finished: Option<Result<usize, String>>,
+    /// Set once when the batch ends: Ok(files) or why it stopped. Taken by the UI.
+    pub finished: Option<Result<usize, Failure>>,
+}
+
+/// Why a batch stopped.
+#[derive(Clone, Debug)]
+pub enum Failure {
+    /// The repo is gated: its license has to be accepted on huggingface.co and a token added (the repo id).
+    Access(String),
+    Other(String),
+}
+
+impl std::fmt::Display for Failure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Failure::Access(repo) => write!(
+                f,
+                "{}",
+                tr!(
+                    format!("Hugging Face pide acceso a {repo}: acepta su licencia en huggingface.co/{repo} y añade tu token en Ajustes."),
+                    format!("Hugging Face needs access to {repo}: accept its license at huggingface.co/{repo} and add your token in Settings.")
+                )
+            ),
+            Failure::Other(m) => write!(f, "{m}"),
+        }
+    }
+}
+
+impl From<String> for Failure {
+    fn from(m: String) -> Self {
+        Failure::Other(m)
+    }
+}
+
+impl From<&str> for Failure {
+    fn from(m: &str) -> Self {
+        Failure::Other(m.to_string())
+    }
 }
 
 #[derive(Default)]
@@ -50,7 +86,7 @@ impl Downloader {
         self.state.lock().unwrap().clone()
     }
 
-    pub fn take_finished(&self) -> Option<Result<usize, String>> {
+    pub fn take_finished(&self) -> Option<Result<usize, Failure>> {
         self.state.lock().unwrap().finished.take()
     }
 
@@ -103,15 +139,12 @@ fn request(agent: &ureq::Agent, method: &str, url: &str, token: Option<&str>) ->
     }
 }
 
-fn explain(e: ureq::Error, item: &Item) -> String {
+fn explain(e: ureq::Error, item: &Item) -> Failure {
     match e {
-        ureq::Error::Status(401 | 403, _) => tr!(
-            format!("Hugging Face pide acceso a {0}: acepta la licencia en huggingface.co/{0} y añade tu token en Ajustes.", item.repo),
-            format!("Hugging Face needs access to {0}: accept the license at huggingface.co/{0} and add your token in Settings.", item.repo)
-        ),
-        ureq::Error::Status(404, _) => tr!(format!("{} ya no está en Hugging Face.", item.name), format!("{} is no longer on Hugging Face.", item.name)),
-        ureq::Error::Status(code, _) => format!("{}: HTTP {code}", item.name),
-        ureq::Error::Transport(t) => tr!(format!("Sin conexión con Hugging Face: {t}"), format!("Could not reach Hugging Face: {t}")),
+        ureq::Error::Status(401 | 403, _) => Failure::Access(item.repo.clone()),
+        ureq::Error::Status(404, _) => tr!(format!("{} ya no está en Hugging Face.", item.name), format!("{} is no longer on Hugging Face.", item.name)).into(),
+        ureq::Error::Status(code, _) => format!("{}: HTTP {code}", item.name).into(),
+        ureq::Error::Transport(t) => tr!(format!("Sin conexión con Hugging Face: {t}"), format!("Could not reach Hugging Face: {t}")).into(),
     }
 }
 
@@ -121,7 +154,7 @@ fn part_of(dest: &Path) -> PathBuf {
     dest.with_file_name(name)
 }
 
-fn run(items: &[Item], token: Option<&str>, state: &Mutex<Progress>, cancel: &AtomicBool) -> Result<(), String> {
+fn run(items: &[Item], token: Option<&str>, state: &Mutex<Progress>, cancel: &AtomicBool) -> Result<(), Failure> {
     let agent = agent();
     let mut sizes = vec![];
     for it in items {
@@ -141,7 +174,8 @@ fn run(items: &[Item], token: Option<&str>, state: &Mutex<Progress>, cancel: &At
             return Err(tr!(
                 format!("Falta espacio en disco: se necesitan {} y hay {} libres.", gb(needed), gb(free)),
                 format!("Not enough disk space: {} needed, {} free.", gb(needed), gb(free))
-            ));
+            )
+            .into());
         }
     }
     for (i, (it, &total)) in items.iter().zip(&sizes).enumerate() {
@@ -158,7 +192,7 @@ fn run(items: &[Item], token: Option<&str>, state: &Mutex<Progress>, cancel: &At
     Ok(())
 }
 
-fn fetch(agent: &ureq::Agent, it: &Item, token: Option<&str>, total: u64, state: &Mutex<Progress>, cancel: &AtomicBool) -> Result<(), String> {
+fn fetch(agent: &ureq::Agent, it: &Item, token: Option<&str>, total: u64, state: &Mutex<Progress>, cancel: &AtomicBool) -> Result<(), Failure> {
     std::fs::create_dir_all(it.dest.parent().unwrap_or(Path::new("."))).map_err(|e| e.to_string())?;
     let part = part_of(&it.dest);
     let mut have = part.metadata().map(|m| m.len()).unwrap_or(0);
@@ -193,9 +227,10 @@ fn fetch(agent: &ureq::Agent, it: &Item, token: Option<&str>, total: u64, state:
         return Err(tr!(
             format!("{} quedó incompleto; vuelve a descargar para reanudar.", it.name),
             format!("{} is incomplete; download again to resume.", it.name)
-        ));
+        )
+        .into());
     }
-    std::fs::rename(&part, &it.dest).map_err(|e| e.to_string())
+    Ok(std::fs::rename(&part, &it.dest).map_err(|e| e.to_string())?)
 }
 
 pub fn gb(bytes: u64) -> String {

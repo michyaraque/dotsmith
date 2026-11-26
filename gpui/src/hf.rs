@@ -3,7 +3,7 @@
 use gpui::RenderImage;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -344,5 +344,65 @@ mod tests {
         assert!(i.downloads > 0 && !summary(&i.readme).is_empty());
         assert!(i.sizes["processor/tokenizer.json"] > 1_000_000);
         assert!(avatar(&i.author).is_some());
+    }
+}
+
+/// What an access token reaches: the account it belongs to (or why it was refused), and every gated repo among the
+/// files checked, with whether this token may download from it (its license accepted).
+#[derive(Clone, Debug)]
+pub struct TokenReport {
+    pub user: Result<String, String>,
+    pub gated: Vec<(String, bool)>,
+}
+
+/// Asks Hugging Face who `token` belongs to and, for each gated repo among `files` (repo, path), whether it can
+/// download that file. Blocking: run it off the UI thread.
+pub fn check_token(token: Option<&str>, files: &[(String, String)]) -> TokenReport {
+    let agent = agent();
+    let user = match token {
+        None => Err(crate::tr!("Todavía no hay token.", "There is no token yet.").to_string()),
+        Some(t) => match get(&agent, "https://huggingface.co/api/whoami-v2", Some(t)) {
+            Ok(r) => r.into_json::<Value>().ok().and_then(|v| v["name"].as_str().map(String::from)).ok_or_else(|| "Hugging Face".to_string()),
+            Err(ureq::Error::Status(401, _)) => {
+                Err(crate::tr!("Hugging Face no reconoce este token: cópialo otra vez.", "Hugging Face does not recognise this token: copy it again.")
+                    .to_string())
+            }
+            Err(e) => Err(crate::tr!(format!("Sin respuesta de Hugging Face: {e}"), format!("No answer from Hugging Face: {e}")).to_string()),
+        },
+    };
+    let mut seen = HashSet::new();
+    let mut gated = vec![];
+    for (repo, path) in files {
+        if !seen.insert(repo.as_str()) {
+            continue;
+        }
+        let api: Option<Value> = get(&agent, &format!("https://huggingface.co/api/models/{repo}"), None).ok().and_then(|r| r.into_json().ok());
+        if !api.is_some_and(|a| a["gated"].as_bool().unwrap_or(a["gated"].is_string())) {
+            continue;
+        }
+        let head = agent.head(&format!("https://huggingface.co/{repo}/resolve/main/{path}"));
+        let head = match token {
+            Some(t) => head.set("Authorization", &format!("Bearer {t}")),
+            None => head,
+        };
+        gated.push((repo.clone(), head.call().is_ok()));
+    }
+    TokenReport { user, gated }
+}
+
+#[cfg(test)]
+mod token_tests {
+    /// Against huggingface.co: `HF_TOKEN=... cargo test --release checks_a_token -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn checks_a_token() {
+        let files = [("krea/Krea-2-Raw".to_string(), "tokenizer/tokenizer.json".to_string()), ("Comfy-Org/Krea-2".to_string(), "README.md".to_string())];
+        let none = super::check_token(None, &files);
+        assert!(none.user.is_err());
+        assert_eq!(none.gated, vec![("krea/Krea-2-Raw".to_string(), false)]);
+        if let Ok(t) = std::env::var("HF_TOKEN") {
+            let r = super::check_token(Some(&t), &files);
+            println!("user ok: {}, gated: {:?}", r.user.is_ok(), r.gated);
+        }
     }
 }

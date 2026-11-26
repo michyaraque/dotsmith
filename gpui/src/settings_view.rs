@@ -17,18 +17,20 @@ pub enum Tab {
     #[default]
     General,
     Models,
+    HuggingFace,
     Gpu,
     Shortcuts,
     About,
 }
 
 impl Tab {
-    const ALL: [Tab; 5] = [Tab::General, Tab::Models, Tab::Gpu, Tab::Shortcuts, Tab::About];
+    pub const ALL: [Tab; 6] = [Tab::General, Tab::Models, Tab::HuggingFace, Tab::Gpu, Tab::Shortcuts, Tab::About];
 
     pub fn from_key(k: &str) -> Option<Tab> {
         match k {
             "general" => Some(Tab::General),
             "models" => Some(Tab::Models),
+            "huggingface" => Some(Tab::HuggingFace),
             "gpu" => Some(Tab::Gpu),
             "shortcuts" => Some(Tab::Shortcuts),
             "about" => Some(Tab::About),
@@ -40,6 +42,7 @@ impl Tab {
         match self {
             Tab::General => tr!("General", "General"),
             Tab::Models => tr!("Modelos y LoRAs", "Models & LoRAs"),
+            Tab::HuggingFace => "Hugging Face",
             Tab::Gpu => tr!("GPU y memoria", "GPU & memory"),
             Tab::Shortcuts => tr!("Atajos", "Shortcuts"),
             Tab::About => tr!("Acerca de", "About"),
@@ -50,6 +53,7 @@ impl Tab {
         match self {
             Tab::General => "settings",
             Tab::Models => "box",
+            Tab::HuggingFace => "key-round",
             Tab::Gpu => "cpu",
             Tab::Shortcuts => "keyboard",
             Tab::About => "info",
@@ -59,6 +63,13 @@ impl Tab {
 
 /// Progress label of downloads started from a link (families use their id).
 const LINK: &str = "link";
+
+/// The Hugging Face token test: running, or what it found.
+#[derive(Clone)]
+pub(super) enum TokenCheck {
+    Running,
+    Done(crate::hf::TokenReport),
+}
 
 /// "owner/repo/path", "owner/repo/blob/<rev>/path" or a huggingface.co URL as (repo, revision, path).
 fn parse_hf_link(text: &str) -> Option<(String, String, String)> {
@@ -213,6 +224,14 @@ impl Studio {
         if Some(&typed) != self.settings.hf_token.as_ref() {
             self.update_settings(|s| s.hf_token = (!typed.is_empty()).then_some(typed), cx);
         }
+        // a gated repo without a token would fail on its first file: say so now, with the way out
+        if self.settings.hf_token().is_none()
+            && let Some(repo) = items.iter().map(|i| &i.repo).find(|r| self.hf_info(r).is_some_and(|(info, _)| info.gated))
+        {
+            self.alert = Some(super::Alert::access(repo));
+            cx.notify();
+            return;
+        }
         self.downloads.start(label.to_string(), items, self.settings.hf_token());
         cx.notify();
     }
@@ -308,8 +327,6 @@ impl Studio {
         let models_dir = dotsmith_engine::locations::download_root().unwrap_or_default();
         let library = self.settings.lora_library().unwrap_or_default();
         let hf = self.settings.hf_dirs.clone();
-        let busy = self.downloads.progress().running;
-        let link_progress = self.download_progress(LINK, cx);
         let catalog_error = self.model.catalog_error.clone();
         let status = div()
             .flex()
@@ -420,28 +437,117 @@ impl Studio {
                         )
                     })))
             }))
-            .child(group("Hugging Face"))
+            .into_any_element()
+    }
+
+    /// Hugging Face: the steps to a working token, a test that says what it unlocks, and downloads by link.
+    fn hf_tab(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let busy = self.downloads.progress().running;
+        let link_progress = self.download_progress(LINK, cx);
+        let check = self.token_check.lock().unwrap().1.clone();
+        // the gated repos the catalog downloads from: the test's list once it ran, else the cards already fetched
+        let gated: Vec<String> = match &check {
+            Some(TokenCheck::Done(r)) => r.gated.iter().map(|g| g.0.clone()).collect(),
+            _ => {
+                let mut v: Vec<String> = self.model.files.iter().flat_map(|f| &f.1).filter_map(|r| r.remote.as_ref().map(|x| x.repo.clone())).collect();
+                v.sort();
+                v.dedup();
+                v.retain(|r| self.hf_info(r).is_some_and(|(i, _)| i.gated));
+                v
+            }
+        };
+        let link = |id: (&'static str, usize), text: String, url: String| button_i(id, "external-link", &text).on_click(move |_, _, cx| cx.open_url(&url));
+        let result: Option<AnyElement> = check.map(|c| match c {
+            TokenCheck::Running => div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(crate::icons::spinner("hf-check", 14., MUTED()))
+                .child(note(tr!("Comprobando con Hugging Face…", "Checking with Hugging Face…")))
+                .into_any_element(),
+            TokenCheck::Done(r) => {
+                let line = |ok: bool, text: String| {
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(icon(if ok { "circle-check-big" } else { "circle-alert" }).size(px(15.)).text_color(rgb(if ok { BLUE() } else { DANGER() })))
+                        .child(div().flex_1().min_w_0().text_size(px(12.5)).text_color(rgb(TEXT())).child(text))
+                };
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .p(px(12.))
+                    .rounded(px(10.))
+                    .bg(rgb(BG()))
+                    .border_1()
+                    .border_color(rgb(BORDER_SOFT()))
+                    .child(match &r.user {
+                        Ok(name) => line(true, tr!(format!("Conectado como {name}"), format!("Signed in as {name}"))),
+                        Err(e) => line(false, e.clone()),
+                    })
+                    .children(r.gated.iter().enumerate().map(|(i, (repo, ok))| {
+                        let row = line(
+                            *ok,
+                            if *ok {
+                                tr!(format!("{repo}: con acceso"), format!("{repo}: access granted"))
+                            } else {
+                                tr!(format!("{repo}: falta aceptar su licencia"), format!("{repo}: its license is not accepted yet"))
+                            },
+                        );
+                        if *ok { row } else { row.child(link(("hf-accept", i), tr!("Aceptar", "Accept").into(), format!("https://huggingface.co/{repo}"))) }
+                    }))
+                    .into_any_element()
+            }
+        });
+        div()
+            .flex()
+            .flex_col()
+            .child(note(tr!(
+                "Solo hace falta para los modelos que piden aceptar una licencia, como Krea 2. Es gratis y se hace una vez.",
+                "Only needed for models that ask you to accept a license, such as Krea 2. It is free and done once."
+            )))
+            .child(group(tr!("Conectar tu cuenta", "Connect your account")))
             .child(setting_row(
-                tr!("Token de acceso", "Access token"),
-                tr!("Solo para modelos con licencia que aceptar.", "Only for models with a license to accept."),
-                div().w(px(260.)).child(self.hf_token.clone()),
+                tr!("1. Entra en Hugging Face", "1. Sign in to Hugging Face"),
+                tr!("Crea una cuenta gratis si no tienes.", "Create a free account if you do not have one."),
+                link(("hf-login", 0), "huggingface.co".into(), "https://huggingface.co/login".into()),
             ))
+            .child(setting_row(
+                tr!("2. Acepta la licencia", "2. Accept the license"),
+                tr!("En la página de cada modelo que la pide.", "On the page of each model that asks for it."),
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .justify_end()
+                    .gap(px(6.))
+                    .children(gated.iter().enumerate().map(|(i, repo)| link(("hf-license", i), repo.clone(), format!("https://huggingface.co/{repo}")))),
+            ))
+            .child(setting_row(
+                tr!("3. Crea un token de lectura", "3. Create a read token"),
+                tr!("Tipo Read; ponle el nombre que quieras.", "Type Read; any name will do."),
+                link(("hf-new-token", 0), tr!("Crear token", "Create token").into(), "https://huggingface.co/settings/tokens/new?tokenType=read".into()),
+            ))
+            .child(setting_row(
+                tr!("4. Pégalo y pruébalo", "4. Paste it and test it"),
+                tr!("Se guarda solo en este PC.", "It is kept on this PC only."),
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(div().w(px(240.)).child(self.hf_token.clone()))
+                    .child(button_i("hf-test", "key-round", tr!("Probar", "Test")).on_click(cx.listener(|this, _, _, cx| this.test_token(cx)))),
+            ))
+            .children(result.map(|r| div().pt(px(4.)).pb(px(12.)).child(r)))
+            .child(group(tr!("Descargar un archivo", "Download a file")))
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .gap(px(8.))
                     .py(px(12.))
-                    .border_t_1()
-                    .border_color(rgb(BORDER_SOFT()))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(3.))
-                            .child(div().text_size(px(13.)).text_color(rgb(TEXT())).child(tr!("Descargar un archivo", "Download a file")))
-                            .child(note(tr!("owner/repo/ruta o un enlace de huggingface.co", "owner/repo/path or a huggingface.co link"))),
-                    )
+                    .child(note(tr!("owner/repo/ruta o un enlace de huggingface.co", "owner/repo/path or a huggingface.co link")))
                     .child(self.hf_url.clone())
                     .child(div().flex().gap(px(6.)).when(!busy, |d| {
                         d.child(
@@ -456,6 +562,26 @@ impl Studio {
                     .children(link_progress),
             )
             .into_any_element()
+    }
+
+    /// Saves the typed token and checks it on a worker thread: the account, and access to every gated repo the
+    /// catalog downloads from.
+    pub(super) fn test_token(&mut self, cx: &mut Context<Self>) {
+        let typed = self.hf_token.read(cx).text().trim().to_string();
+        if Some(&typed) != self.settings.hf_token.as_ref() {
+            self.update_settings(|s| s.hf_token = (!typed.is_empty()).then_some(typed), cx);
+        }
+        let token = self.settings.hf_token();
+        let files: Vec<(String, String)> =
+            self.model.files.iter().flat_map(|f| &f.1).filter_map(|r| r.remote.as_ref().map(|x| (x.repo.clone(), x.path.clone()))).collect();
+        let state = self.token_check.clone();
+        *state.lock().unwrap() = (state.lock().unwrap().0 + 1, Some(TokenCheck::Running));
+        std::thread::spawn(move || {
+            let report = crate::hf::check_token(token.as_deref(), &files);
+            let mut s = state.lock().unwrap();
+            *s = (s.0 + 1, Some(TokenCheck::Done(report)));
+        });
+        cx.notify();
     }
 
     fn gpu_tab(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -712,6 +838,7 @@ impl Studio {
         let body = match tab {
             Tab::General => self.general_tab(cx),
             Tab::Models => self.models_tab(cx),
+            Tab::HuggingFace => self.hf_tab(cx),
             Tab::Gpu => self.gpu_tab(cx),
             Tab::Shortcuts => self.shortcuts_tab(),
             Tab::About => self.about_tab(cx),

@@ -354,10 +354,19 @@ impl Studio {
                 .text_size(px(12.5))
                 .line_height(px(19.))
                 .text_color(rgb(MUTED()))
-                .child(tr!(
-                    "Este repo pide aceptar su licencia en Hugging Face. Acéptala y añade tu token en Ajustes > Modelos y LoRAs para ver la ficha y descargar.",
-                    "This repo asks you to accept its license on Hugging Face. Accept it and add your token in Settings > Models & LoRAs to see the card and download."
-                ))
+                .flex()
+                .items_center()
+                .gap(px(12.))
+                .child(div().flex_1().child(tr!(
+                    "Este repo pide aceptar su licencia en Hugging Face (gratis). Con tu token añadido se ven la ficha y la descarga.",
+                    "This repo asks you to accept its license on Hugging Face (free). With your token added you get the card and the download."
+                )))
+                .child(button_i("hub-token", "key-round", tr!("Configurar token", "Set up token")).on_click(cx.listener(|this, _, _, cx| {
+                    this.hub_open = false;
+                    this.settings_tab = super::settings_view::Tab::HuggingFace;
+                    this.settings_open = true;
+                    cx.notify();
+                })))
                 .into_any_element(),
             (Some(State::Failed(e)), _) => div()
                 .text_size(px(12.))

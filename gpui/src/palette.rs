@@ -90,7 +90,7 @@ impl Studio {
         if self.model.loaded.is_some() {
             out.push(Entry { cmd: Cmd::FreeGpu, glyph: "cpu", title: tr!("Liberar la GPU", "Free the GPU").into(), group: go, keys: None });
         }
-        for t in [Tab::General, Tab::Models, Tab::Gpu, Tab::Shortcuts, Tab::About] {
+        for t in Tab::ALL {
             out.push(Entry {
                 cmd: Cmd::Settings(t),
                 glyph: t.glyph(),

@@ -49,6 +49,7 @@ icons!(
     "star",
     "circle-check-big",
     "external-link",
+    "key-round",
     "memory-stick",
     "gpu",
     "chevron-right",

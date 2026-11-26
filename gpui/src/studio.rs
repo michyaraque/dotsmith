@@ -10,7 +10,7 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::backend::{Backend, Folders, Live, Msg};
@@ -63,6 +63,8 @@ actions!(
 
 /// How long a deleted result waits (undoable) before it goes to the Recycle Bin.
 const UNDO_SECS: u64 = 15;
+/// How long an error stays on screen above everything.
+const TOAST_SECS: u64 = 8;
 /// The last deleted result while it can be undone: (original, parked) file pairs, its history position, when.
 type Parked = (Vec<(PathBuf, PathBuf)>, usize, Instant);
 
@@ -286,6 +288,31 @@ struct Run {
     magenta: bool,
 }
 
+#[derive(Clone)]
+pub(super) struct Alert {
+    title: String,
+    body: String,
+    /// a gated Hugging Face repo: the dialog offers its license page and the token field
+    repo: Option<String>,
+}
+
+impl Alert {
+    pub(super) fn access(repo: &str) -> Self {
+        Alert {
+            title: tr!("Esta descarga necesita permiso", "This download needs permission").into(),
+            body: tr!(
+                format!(
+                    "{repo} pide aceptar su licencia en Hugging Face antes de descargar. Es gratis: acéptala con tu cuenta, añade tu token (Añadir token te guía y lo prueba) y vuelve a pulsar Descargar."
+                ),
+                format!(
+                    "{repo} asks you to accept its license on Hugging Face before downloading. It is free: accept it with your account, add your token (Add token walks you through it and tests it) and press Download again."
+                )
+            ),
+            repo: Some(repo.to_string()),
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 struct GpuState {
     ok: bool,
@@ -346,7 +373,6 @@ impl ModelState {
 
     fn family_ready(&self, family: &str) -> bool {
         let f = self.files_of(family);
-        // every required file is on disk in at least one precision (default or an alternative such as bf16)
         let covered = |r: &FileRow| r.found || f.iter().any(|o| o.found && o.role == r.role && o.turbo_only == r.turbo_only);
         !f.is_empty() && f.iter().all(|r| r.turbo_only || r.precision.is_some() || covered(r))
     }
@@ -410,6 +436,13 @@ pub struct Studio {
     selected: Option<PathBuf>,
     big: Option<Arc<RgbaImage>>,
     status: Option<(String, Level, Instant)>,
+    /// the last error, shown above everything for a few seconds (the status bar keeps it too)
+    toast: Option<(String, Instant)>,
+    /// a dialog that needs an answer (a download that needs access, a failed download)
+    alert: Option<Alert>,
+    /// the Hugging Face token test (a version that changes when it starts and ends, and its state)
+    token_check: Arc<Mutex<(u64, Option<settings_view::TokenCheck>)>>,
+    token_seen: u64,
     model_open: bool,
     prompt_modal: bool,
     small: Option<(Arc<RenderImage>, Arc<RenderImage>, u32, u32)>, // sprite at 1x and 2x real pixels
@@ -662,6 +695,10 @@ impl Studio {
             palette_rows: vec![],
             ctx_menu: None,
             deleted: None,
+            toast: None,
+            alert: None,
+            token_check: Default::default(),
+            token_seen: 0,
             hist_query: cx.new(|cx| TextInput::new(cx, tr!("Buscar en el historial…", "Search history…"), 1)),
             hist_query_text: String::new(),
             settings,
@@ -704,7 +741,11 @@ impl Studio {
         &mut self.forms[self.mode as usize]
     }
     fn say(&mut self, msg: impl Into<String>, level: Level) {
-        self.status = Some((msg.into(), level, Instant::now()));
+        let msg = msg.into();
+        if level == Level::Error {
+            self.toast = Some((msg.lines().next().unwrap_or("").to_string(), Instant::now()));
+        }
+        self.status = Some((msg, level, Instant::now()));
     }
     fn send(&mut self, v: Value) {
         match &self.backend {
@@ -753,11 +794,24 @@ impl Studio {
         if let Some(done) = self.downloads.take_finished() {
             match done {
                 Ok(n) => self.say(tr!(format!("Descarga completa · {n} archivos."), format!("Download complete · {n} files.")), Level::Ok),
-                Err(e) => self.say(e, Level::Error),
+                Err(crate::download::Failure::Access(repo)) => self.alert = Some(Alert::access(&repo)),
+                Err(e) => {
+                    self.status = Some((e.to_string(), Level::Error, Instant::now()));
+                    self.alert = Some(Alert { title: tr!("La descarga no terminó", "The download did not finish").into(), body: e.to_string(), repo: None });
+                }
             }
             if let Some(b) = &self.backend {
                 b.configure(folders(&self.settings));
             }
+            cx.notify();
+        }
+        let token_check = self.token_check.lock().unwrap().0;
+        if token_check != self.token_seen {
+            self.token_seen = token_check;
+            cx.notify();
+        }
+        if self.toast.as_ref().is_some_and(|t| t.1.elapsed() > Duration::from_secs(TOAST_SECS)) {
+            self.toast = None;
             cx.notify();
         }
         if self.deleted.as_ref().is_some_and(|d| d.2.elapsed() > Duration::from_secs(UNDO_SECS)) {
@@ -1084,7 +1138,10 @@ impl Studio {
         }
     }
     fn stop(&mut self, _: &Stop, window: &mut Window, cx: &mut Context<Self>) {
-        if self.palette_open {
+        if self.alert.is_some() {
+            self.alert = None;
+            cx.notify();
+        } else if self.palette_open {
             self.close_palette(window, cx);
         } else if self.settings_open || self.model_open || self.hub_open || self.downloads_open || self.menu_open {
             self.menu_open = false;
@@ -1373,6 +1430,90 @@ impl Studio {
     }
 
     /// The layer every modal sits on: a dimmed backdrop that closes it on click, the card centred, all fading in.
+    /// The dialog above everything: a title, what happened and, for a gated repo, the two steps that unlock it.
+    fn alert_view(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(a) = self.alert.clone() else { return div().into_any_element() };
+        let mut actions = div().flex().justify_end().gap(px(8.)).pt(px(6.));
+        if let Some(repo) = a.repo.clone() {
+            let url = format!("https://huggingface.co/{repo}");
+            actions = actions
+                .child(button_i("alert-license", "external-link", tr!("Aceptar la licencia", "Accept the license")).on_click(move |_, _, cx| cx.open_url(&url)))
+                .child(button_i("alert-token", "settings", tr!("Añadir token", "Add token")).on_click(cx.listener(|this, _, window, cx| {
+                    this.alert = None;
+                    this.settings_tab = settings_view::Tab::HuggingFace;
+                    this.settings_open = true;
+                    window.focus(&this.hf_token.read(cx).focus_handle.clone());
+                    cx.notify();
+                })));
+        }
+        actions = actions.child(button("alert-close", tr!("Cerrar", "Close")).on_click(cx.listener(|this, _, _, cx| {
+            this.alert = None;
+            cx.notify();
+        })));
+        let card = div()
+            .id("alert-card")
+            .occlude()
+            .w(px(460.))
+            .max_w_full()
+            .p(px(22.))
+            .rounded(px(14.))
+            .bg(rgb(PANEL()))
+            .border_1()
+            .border_color(rgb(BORDER()))
+            .shadow_lg()
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .child(icon("triangle-alert").size(px(20.)).text_color(rgb(WARN())))
+                    .child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(TEXT())).child(a.title)),
+            )
+            .child(div().text_size(px(12.5)).line_height(px(19.)).text_color(rgb(MUTED())).child(a.body))
+            .child(actions);
+        self.modal_layer("alert-veil", card, |s, _, _| s.alert = None, cx)
+    }
+
+    /// The last error for a few seconds, above any open window, so it is never missed under a modal.
+    fn toast_view(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (msg, _) = self.toast.clone()?;
+        Some(
+            div()
+                .absolute()
+                .top(px(54.))
+                .left_0()
+                .w_full()
+                .flex()
+                .justify_center()
+                .child(
+                    div()
+                        .id("toast")
+                        .occlude()
+                        .max_w(px(620.))
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .px(px(14.))
+                        .py(px(10.))
+                        .rounded(px(10.))
+                        .bg(rgb(PANEL()))
+                        .border_1()
+                        .border_color(rgb(DANGER()))
+                        .shadow_lg()
+                        .child(icon("circle-alert").size(px(16.)).text_color(rgb(DANGER())))
+                        .child(div().flex_1().min_w_0().text_size(px(12.5)).line_height(px(18.)).text_color(rgb(TEXT())).child(msg))
+                        .child(icon_btn("toast-close", "x").on_click(cx.listener(|this, _, _, cx| {
+                            this.toast = None;
+                            cx.notify();
+                        }))),
+                )
+                .into_any_element(),
+        )
+    }
+
     pub(super) fn modal_layer(
         &mut self,
         id: &'static str,
@@ -4234,13 +4375,16 @@ impl Render for Studio {
         let prompt_modal = self.prompt_modal.then(|| self.prompt_modal_view(cx));
         let settings = self.settings_open.then(|| self.settings_view(cx));
         let palette = self.palette_open.then(|| self.palette_view(cx));
+        let alert = self.alert.is_some().then(|| self.alert_view(cx));
+        let toast = self.toast_view(cx);
         let ctx_menu = self.ctx_menu.map(|p| self.context_menu(p, cx));
         let hub = self.hub_open.then(|| self.hub_view(cx));
         let downloads = self.downloads_open.then(|| self.downloads_view(cx));
         let err = self.error_detail();
         let welcome = self.welcome_visible();
         // the modals above are built; the background below loses its tab stops while one is open
-        let modal = self.model_open || self.prompt_modal || self.settings_open || self.palette_open || self.hub_open || self.ctx_menu.is_some();
+        let modal =
+            self.model_open || self.prompt_modal || self.settings_open || self.palette_open || self.hub_open || self.ctx_menu.is_some() || self.alert.is_some();
         TAB_OFF.store(modal, std::sync::atomic::Ordering::Relaxed);
         // the background's text fields leave the tab order too
         for input in [self.form().prompt.clone(), self.form().seed.clone(), self.hist_query.clone()] {
@@ -4317,6 +4461,8 @@ impl Render for Studio {
             .children(settings)
             .children(ctx_menu)
             .children(palette)
+            .children(alert)
+            .children(toast)
     }
 }
 
