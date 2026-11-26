@@ -471,6 +471,9 @@ pub struct Studio {
     restore_size: (f32, f32),
     square: Rc<Cell<Option<Bounds<Pixels>>>>,
     logo: Arc<RenderImage>,
+    /// new versions from GitHub (update.rs); `update_seq` is the last state the window drew
+    updater: crate::update::Updater,
+    update_seq: u64,
     picker: PickerState,
     anim: crate::anim::Anim,
     trash: Vec<Arc<RenderImage>>,
@@ -524,6 +527,7 @@ fn camera_index(name: &str) -> usize {
 
 impl Studio {
     pub fn new(settings: Settings, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let updater = crate::update::Updater::start(settings.check_updates.unwrap_or(true));
         // stored in enum order: forms[mode as usize]; MODES is only the rail order
         let forms: Vec<Form> = [Mode::Single, Mode::Pack, Mode::Variants, Mode::Regions, Mode::Photo, Mode::Angle, Mode::Pose, Mode::Creature, Mode::Walls]
             .iter()
@@ -677,6 +681,8 @@ impl Studio {
             viewport: (1500., 940.),
             square: Rc::new(Cell::new(None)),
             logo: pixels::render(&image::load_from_memory(include_bytes!("../assets/dotsmith.png")).unwrap().to_rgba8(), 1),
+            updater,
+            update_seq: 0,
             picker: PickerState::default(),
             anim: crate::anim::Anim::default(),
             trash: vec![],
@@ -771,6 +777,11 @@ impl Studio {
 
     // ------------------------------------------------------------ backend events
     fn pump(&mut self, cx: &mut Context<Self>) {
+        let seq = self.updater.seq.load(std::sync::atomic::Ordering::Relaxed);
+        if seq != self.update_seq {
+            self.update_seq = seq;
+            cx.notify();
+        }
         let msgs = self.backend.as_ref().map(|b| b.poll()).unwrap_or_default();
         let any = !msgs.is_empty();
         for m in msgs {
@@ -2424,6 +2435,58 @@ impl Studio {
         Some((l.what.clone(), frac, txt))
     }
 
+    /// The update button's action for the current state: look again, download (installed copy), open the release
+    /// page (portable copy), or hand over to the installer and close.
+    pub(super) fn update_action(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::update::State;
+        match self.updater.state() {
+            State::Available(r) if !crate::update::installed() => cx.open_url(&r.page),
+            State::Available(_) => self.updater.download(),
+            State::Ready { .. } => match self.updater.install() {
+                Ok(()) => window.remove_window(),
+                Err(e) => self.say(tr!(format!("No se pudo abrir el instalador: {e}"), format!("Could not open the installer: {e}")), Level::Error),
+            },
+            State::Checking | State::Downloading { .. } => {}
+            State::Idle | State::UpToDate | State::Failed(_) => self.updater.check(),
+        }
+        cx.notify();
+    }
+
+    /// Title-bar button while a newer version is available, downloading or ready.
+    fn update_chip(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use crate::update::State;
+        let st = self.updater.state();
+        let v = st.release()?.version.clone();
+        let text = match &st {
+            State::Available(_) => tr!(format!("Actualizar a {v}"), format!("Update to {v}")),
+            State::Downloading { done, total, .. } => {
+                let pct = crate::update::percent(*done, *total);
+                tr!(format!("Descargando {pct} %"), format!("Downloading {pct}%"))
+            }
+            _ => tr!("Reiniciar para actualizar", "Restart to update").to_string(),
+        };
+        Some(
+            div()
+                .kb("update-chip")
+                .h(px(26.))
+                .px(px(10.))
+                .mr(px(6.))
+                .flex()
+                .items_center()
+                .rounded_full()
+                .bg(rgb(ACCENT()))
+                .text_color(rgb(ACCENT_INK()))
+                .text_size(px(11.5))
+                .font_weight(FontWeight::SEMIBOLD)
+                .cursor_pointer()
+                .hover(|s| s.bg(rgb(ACCENT_HOVER())))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(text)
+                .on_click(cx.listener(|this, _, window, cx| this.update_action(window, cx)))
+                .into_any_element(),
+        )
+    }
+
     fn titlebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         // caption buttons drive the window themselves (GPUI's caption hit test does not fire here);
         // glyphs from Segoe Fluent Icons, the font Windows 11 draws its own caption buttons with
@@ -2476,6 +2539,7 @@ impl Studio {
                     .on_mouse_down(MouseButton::Left, drag),
             )
             .child(div().id("drag-right").flex_1().h_full().window_control_area(WindowControlArea::Drag).on_mouse_down(MouseButton::Left, drag))
+            .children(self.update_chip(cx))
             .when(!minimal, |d| {
                 d.child(
                     div()

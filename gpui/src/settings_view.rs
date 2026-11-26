@@ -4,7 +4,7 @@ use gpui::{AnyElement, Context, FontWeight, PathPromptOptions, SharedString, div
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
-use super::{FileRow, Keyboard, Level, Studio, button, button_i, folders, icon_btn, kbd, seg, segmented, setting_row, tooltip};
+use super::{FileRow, Keyboard, Level, Studio, button, button_i, folders, icon_btn, kbd, seg, segmented, setting_row, switch, tooltip};
 use crate::download::{Item, gb};
 use crate::i18n::{self, Lang};
 use crate::icons::icon;
@@ -808,6 +808,61 @@ impl Studio {
         div().flex().flex_col().children(rows.into_iter().map(|(what, keys)| setting_row(what, "", kbd(keys)))).into_any_element()
     }
 
+    fn updates_rows(&mut self, cx: &mut Context<Self>) -> gpui::Div {
+        use crate::update::State;
+        let st = self.updater.state();
+        let pct = crate::update::percent;
+        let desc: String = match &st {
+            State::Idle => String::new(),
+            State::Checking => tr!("Buscando…", "Checking…").into(),
+            State::UpToDate => tr!("Tienes la última versión.", "You have the latest version.").into(),
+            State::Available(r) => tr!(format!("Versión {} disponible.", r.version), format!("Version {} is available.", r.version)),
+            State::Downloading { release, done, total } => {
+                tr!(format!("Descargando {}: {} %", release.version, pct(*done, *total)), format!("Downloading {}: {}%", release.version, pct(*done, *total)))
+            }
+            State::Ready { release, .. } => {
+                tr!(format!("Versión {} lista para instalar.", release.version), format!("Version {} is ready to install.", release.version))
+            }
+            State::Failed(e) => e.clone(),
+        };
+        let action = match &st {
+            State::Checking | State::Downloading { .. } => None,
+            State::Available(_) if crate::update::installed() => Some(tr!("Descargar e instalar", "Download and install")),
+            State::Available(_) => Some(tr!("Abrir la descarga", "Open the download")),
+            State::Ready { .. } => Some(tr!("Reiniciar y actualizar", "Restart and update")),
+            _ => Some(tr!("Buscar actualizaciones", "Check for updates")),
+        };
+        let page = st.release().map(|r| r.page.clone());
+        let auto = self.settings.check_updates.unwrap_or(true);
+        div()
+            .flex()
+            .flex_col()
+            .child(setting_row(
+                tr!("Actualizaciones", "Updates"),
+                desc,
+                div()
+                    .flex()
+                    .gap(px(8.))
+                    .when_some(page, |d, url| {
+                        d.child(button_i("update-notes", "external-link", tr!("Novedades", "What's new")).on_click(move |_, _, cx| cx.open_url(&url)))
+                    })
+                    .when_some(action, |d, text| {
+                        d.child(button_i("update-go", "download", text).on_click(cx.listener(|this, _, window, cx| this.update_action(window, cx))))
+                    }),
+            ))
+            .child(setting_row(
+                tr!("Buscar actualizaciones automáticamente", "Check for updates automatically"),
+                "",
+                div().id("update-auto").cursor_pointer().child(switch(auto)).on_click(cx.listener(move |this, _, _, cx| {
+                    this.update_settings(|s| s.check_updates = Some(!auto), cx);
+                    this.updater.set_auto(!auto);
+                    if !auto {
+                        this.updater.check();
+                    }
+                })),
+            ))
+    }
+
     fn about_tab(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let logs = crate::settings::log_dir();
         let config = crate::settings::config_dir();
@@ -818,6 +873,7 @@ impl Studio {
                     .child(div().text_size(px(20.)).font_weight(FontWeight::BOLD).text_color(rgb(TEXT())).child("Dotsmith"))
                     .child(note(format!("{} {} · {}", tr!("Versión", "Version"), env!("CARGO_PKG_VERSION"),
                         tr!("todo se ejecuta en tu PC", "everything runs on your PC"))))))
+            .child(self.updates_rows(cx))
             .child(setting_row(tr!("Creado por", "Made by"), env!("CARGO_PKG_AUTHORS"),
                 div().flex().gap(px(8.))
                     .child(button_i("author-github", "external-link", "GitHub").on_click(|_, _, cx| cx.open_url(AUTHOR_GITHUB)))

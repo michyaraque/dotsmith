@@ -36,6 +36,8 @@ pub struct Settings {
     pub last_mode: Option<String>,
     /// LoRA strength (None = 1.0).
     pub lora_scale: Option<f32>,
+    /// Look for new versions at start and every 12 hours (None = on).
+    pub check_updates: Option<bool>,
 }
 
 pub fn config_dir() -> Option<PathBuf> {
