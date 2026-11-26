@@ -183,6 +183,18 @@ pub fn create_link(link: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Wait until process `pid` has exited (or `limit` passes); an unknown process counts as exited.
+pub fn wait_exit(pid: u32, limit: Duration) {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
+    unsafe {
+        if let Ok(h) = OpenProcess(PROCESS_SYNCHRONIZE, false, pid) {
+            WaitForSingleObject(h, limit.as_millis() as u32);
+            let _ = CloseHandle(h);
+        }
+    }
+}
+
 /// Whether a running program holds `exe` (Windows does not let anyone write to a running program's file).
 pub fn in_use(exe: &Path) -> bool {
     exe.is_file() && std::fs::OpenOptions::new().write(true).open(exe).is_err()

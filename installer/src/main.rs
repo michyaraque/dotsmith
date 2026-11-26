@@ -4,6 +4,7 @@
 //!
 //! `dotsmith-setup`                                   install with the window
 //! `dotsmith-setup --silent [--dir <folder>] [--desktop]`   install with no window
+//! `dotsmith-setup --update [--wait <pid>]`          update started by the app: no questions, reopens it when done
 //! `uninstall.exe --uninstall [--silent]`             uninstall (what Windows' Apps settings run)
 //! `dotsmith-setup --pack <folder> <setup.exe>`       packaging: this program + the files of <folder>
 #[path = "../../gpui/src/i18n.rs"]
@@ -60,7 +61,7 @@ fn main() {
             system::delete_after_exit(&me);
             exit(r);
         }
-        ui::run(ui::Mode::Uninstall(dir));
+        ui::run(ui::Mode::Uninstall(dir), None);
         system::delete_after_exit(&me);
         return;
     }
@@ -68,10 +69,12 @@ fn main() {
     if silent {
         let Some(p) = payload else { exit(Err("this setup has no files".into())) };
         let dir = value("--dir").map(PathBuf::from).or_else(|| system::installed().map(|i| i.dir)).unwrap_or_else(system::default_dir);
-        let job = tasks::Install { dir, desktop: flag("--desktop"), version: VERSION.into() };
+        let job = tasks::Install { dir, desktop: flag("--desktop"), version: VERSION.into(), wait: None };
         exit(tasks::install(&job, &p, &tasks::Shared::default()).map_err(|e| format!("{e:#}")));
     }
-    ui::run(ui::Mode::Install(payload));
+    // started by the app's updater: install over it once it closes, then open it again
+    let update = flag("--update").then(|| value("--wait").and_then(|v| v.parse().ok()));
+    ui::run(ui::Mode::Install(payload), update);
 }
 
 /// End with exit code 0, or 1 after writing the error to stderr (seen when run from a console or a script).

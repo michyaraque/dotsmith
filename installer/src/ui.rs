@@ -60,9 +60,13 @@ pub struct Setup {
     progress: Shared,
     hero: Arc<RenderImage>,
     logo: Arc<RenderImage>,
+    /// started by the app's updater: Some(the app's process id, if known)
+    update: Option<Option<u32>>,
 }
 
-pub fn run(mode: Mode) {
+/// `update`: started by the app's updater (Some, with the app's process id when known): install at once and reopen the
+/// app when done.
+pub fn run(mode: Mode, update: Option<Option<u32>>) {
     Application::new().with_assets(Icons).run(move |cx: &mut App| {
         cx.bind_keys([KeyBinding::new("enter", Primary, None), KeyBinding::new("escape", Back, None)]);
         let bounds = Bounds::centered(None, size(px(W), px(H)), cx);
@@ -75,8 +79,14 @@ pub fn run(mode: Mode) {
             },
             |window, cx| {
                 cx.new(|cx| {
-                    let s = Setup::new(mode, cx);
+                    let mut s = Setup::new(mode, cx);
                     window.focus(&s.focus);
+                    if let Some(wait) = update
+                        && s.screen == Screen::Choose
+                    {
+                        s.update = Some(wait);
+                        s.start(cx);
+                    }
                     s
                 })
             },
@@ -143,6 +153,7 @@ impl Setup {
             progress: Shared::default(),
             hero: hero(),
             logo: render(&logo(), 1),
+            update: None,
         }
     }
 
@@ -176,7 +187,8 @@ impl Setup {
         self.screen = Screen::Working;
         match &self.mode {
             Mode::Install(Some(payload)) => {
-                let (payload, job) = (payload.clone(), tasks::Install { dir: self.dir.clone(), desktop: self.desktop, version: VERSION.into() });
+                let (payload, job) =
+                    (payload.clone(), tasks::Install { dir: self.dir.clone(), desktop: self.desktop, version: VERSION.into(), wait: self.update.flatten() });
                 tasks::spawn(self.progress.clone(), move |p| tasks::install(&job, &payload, p));
             }
             Mode::Install(None) => {}
@@ -366,6 +378,7 @@ impl Setup {
         let old = tr!(format!("Quitar la versión {v}"), format!("Remove version {v}"));
         let steps: Vec<(Step, &str)> = if self.installing() {
             [
+                self.update.is_some().then_some((Step::Close, tr!("Cerrar Dotsmith", "Close Dotsmith"))),
                 self.legacy.then_some((Step::Previous, old.as_str())),
                 Some((Step::Files, tr!("Copiar archivos", "Copy files"))),
                 Some((Step::Shortcuts, tr!("Crear accesos directos", "Create shortcuts"))),
@@ -564,7 +577,11 @@ impl Setup {
 }
 
 impl Render for Setup {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // an update from the app reopens it and closes on its own; an error stays on screen
+        if self.update.is_some() && self.screen == Screen::Done {
+            self.finish(window);
+        }
         let body = match self.screen.clone() {
             Screen::Choose => self.choose(cx),
             Screen::Working => self.working(),

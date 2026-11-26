@@ -12,6 +12,8 @@ pub const LIST: &str = "uninstall.lst";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Step {
+    /// an update: the app that started it closing
+    Close,
     Previous,
     Files,
     Shortcuts,
@@ -38,6 +40,8 @@ pub struct Install {
     pub dir: PathBuf,
     pub desktop: bool,
     pub version: String,
+    /// an update started from the app: its process id, to wait for
+    pub wait: Option<u32>,
 }
 
 pub fn spawn(p: Shared, job: impl FnOnce(&Shared) -> Result<()> + Send + 'static) {
@@ -48,12 +52,23 @@ pub fn spawn(p: Shared, job: impl FnOnce(&Shared) -> Result<()> + Send + 'static
 }
 
 pub fn install(job: &Install, payload: &Payload, p: &Shared) -> Result<()> {
+    if let Some(pid) = job.wait {
+        set(p, Step::Close);
+        system::wait_exit(pid, std::time::Duration::from_secs(120));
+    }
     if let Some(old) = system::legacy() {
         set(p, Step::Previous);
         old.remove()?;
     }
     set(p, Step::Files);
     let exe = job.dir.join(system::EXE);
+    // a program that just exited can hold its file for a moment
+    for _ in 0..20 {
+        if !system::in_use(&exe) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
     if system::in_use(&exe) {
         bail!(in_use_message());
     }
