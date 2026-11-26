@@ -622,7 +622,7 @@ pub fn wall_prompt(style: &str, desc: &str) -> String {
 }
 
 /// A wall piece moved so its opaque box touches the bottom-right of its cell: where 97 % of the training pieces sit
-/// (Tibia sprites are anchored there) and what the room assembly needs. Pack re-centres pieces; this undoes it.
+/// (oblique tile sprites are anchored there) and what the room assembly needs. Pack re-centres pieces; this undoes it.
 pub fn anchor_bottom_right(p: &RgbaImage) -> RgbaImage {
     let (w, h) = p.dimensions();
     let (mut mx, mut my) = (None, None::<u32>);
@@ -838,7 +838,7 @@ fn creature_mode(c: &mut Ctx, r: &Value) -> Result<String> {
     ))
 }
 
-/// Swap x and y (not a mirror): in the Tibia projection east = transpose(south), west = transpose(north).
+/// Swap x and y (not a mirror): in the oblique projection east = transpose(south), west = transpose(north).
 fn transpose(im: &RgbaImage) -> RgbaImage {
     RgbaImage::from_fn(im.height(), im.width(), |x, y| *im.get_pixel(y, x))
 }

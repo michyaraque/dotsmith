@@ -4,7 +4,7 @@
 //!
 //! World: X right, Y away from the viewer (north), Z up; units are sprite pixels at the 32 px scale.
 //! Projections:
-//! - Tibia oblique (default): the ground is seen straight from above (north = up) and height is drawn diagonally up
+//! - Oblique (default): the ground is seen straight from above (north = up) and height is drawn diagonally up
 //!   and to the left (`lean` px per unit on each axis). That is why a low rat lies vertical (N/S) or horizontal (E/W)
 //!   while a tall player leans 45° with the head up-left in every direction (checked on exported player/rat sheets).
 //! - Orthographic: looks north, tilted down by `pitch` (0 = eye level, 90 = straight down), for top-down 3/4 styles.
@@ -97,7 +97,7 @@ pub struct Pose {
     pub dir: Dir,
     pub anim: Anim,
     pub frame: u32,
-    pub oblique: bool, // Tibia oblique projection; false = orthographic camera at `pitch`
+    pub oblique: bool, // oblique projection; false = orthographic camera at `pitch`
     pub lean: f32,     // oblique: screen px left and up per unit of height
     pub pitch: f32,    // orthographic: degrees
     pub size: u32,     // sprite side in px (the rig is drawn at size / 32)

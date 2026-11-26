@@ -15,8 +15,8 @@ use crate::tr;
 fn camera_label(i: usize) -> &'static str {
     if i == 0 { tr!("Oblicua clásica", "Classic oblique") } else { tr!("Cenital 3/4", "Top-down 3/4") }
 }
-/// Frame sizes (w, h) per camera, the most common cells of the training sheets (krea2_creatures_x8_v1): Tibia oblique
-/// sheets have square cells (32-44 px), the top-down 3/4 ones (Drakantos) tall cells, 32 x 56 the most frequent.
+/// Frame sizes (w, h) per camera, the most common cells of the training sheets (krea2_creatures_x8_v1): oblique
+/// projection sheets have square cells (32-44 px), the top-down 3/4 ones tall cells, 32 x 56 the most frequent.
 /// Never past 44 px wide: at x8 that is the widest sheet the LoRA saw (1408 px).
 // square cells only: the 8-frame walk sheets (walks8_x8_v2) were trained at 4x2 cells of 32, 48 or 64 px (x8 ->
 // 1024x512, 1536x768, 2048x1024); tall cells (32x56) are outside that data

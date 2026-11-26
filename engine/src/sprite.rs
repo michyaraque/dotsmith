@@ -609,7 +609,7 @@ pub fn pieces_of(px: &RgbaImage, cell: u32) -> Vec<RgbaImage> {
     vec![px.clone()]
 }
 
-/// Right half reflected onto the left (fixes the Tibia oblique edge in the 45° view; symmetric props only).
+/// Right half reflected onto the left (fixes the oblique projection's edge in the 45° view; symmetric props only).
 pub fn mirror_right(tile: &RgbaImage) -> RgbaImage {
     let Some(b) = bbox(tile) else { return tile.clone() };
     let cx = (b.0 + b.2) / 2;
