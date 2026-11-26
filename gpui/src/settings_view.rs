@@ -499,7 +499,7 @@ impl Studio {
                         .items_start()
                         .gap(px(10.))
                         .child(icon("triangle-alert").size(px(18.)).text_color(rgb(DANGER())))
-                        .child(div().flex_1().text_size(px(12.)).line_height(px(17.)).text_color(rgb(TEXT())).child(g.error.clone())),
+                        .child(div().flex_1().min_w_0().text_size(px(12.)).line_height(px(17.)).text_color(rgb(TEXT())).child(g.error.clone())),
                 )
                 .into_any_element(),
             None => note(tr!("Comprobando la GPU…", "Checking the GPU…")).into_any_element(),

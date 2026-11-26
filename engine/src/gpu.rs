@@ -23,7 +23,11 @@ impl std::fmt::Display for GpuError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             GpuError::NoDriver => write!(f, "NVIDIA driver not found (nvcuda). Dotsmith needs an NVIDIA GPU with a current driver."),
-            GpuError::MissingRuntime(l) => write!(f, "CUDA runtime libraries missing next to Dotsmith: {}. Reinstall Dotsmith.", l.join(", ")),
+            GpuError::MissingRuntime(l) => write!(
+                f,
+                "The CUDA files Dotsmith ships with are missing ({}). Install Dotsmith with its installer or unzip the whole portable folder: a copied dotsmith.exe alone cannot use the GPU.",
+                l.join(", ")
+            ),
             GpuError::NoDevice(e) => write!(f, "No usable NVIDIA GPU: {e}"),
             GpuError::TooOld(g) => write!(
                 f,
