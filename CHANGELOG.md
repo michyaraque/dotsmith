@@ -2,7 +2,7 @@
 
 All notable changes to Dotsmith. The format follows [Keep a Changelog](https://keepachangelog.com) and versions follow [SemVer](https://semver.org).
 
-## [Unreleased]
+## [1.0.0] - 2026-11-26
 
 First public release of Dotsmith: a desktop studio that makes game-ready pixel art on your own NVIDIA GPU, with no account, upload or per-image cost.
 
