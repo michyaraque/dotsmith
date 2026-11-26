@@ -1,0 +1,5 @@
+# Machine-specific tool paths (NVCC_CCBIN, GPUI_FXC_PATH) belong in %USERPROFILE%\.cargo\config.toml or the
+# environment; see CONTRIBUTING.md.
+[env]
+# sm_80 PTX: the driver JIT-compiles it for any RTX 30 / 40 / 50 card
+CUDA_COMPUTE_CAP = "80"
