@@ -188,35 +188,36 @@ impl Setup {
         cx.notify();
     }
 
-    fn primary(&mut self, cx: &mut Context<Self>) {
+    fn primary(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.screen {
             Screen::Choose | Screen::Failed(_) if !matches!(self.mode, Mode::Install(None)) => self.start(cx),
             Screen::License => {
                 self.screen = Screen::Choose;
                 cx.notify();
             }
-            Screen::Done => self.finish(cx),
+            Screen::Done => self.finish(window),
             _ => {}
         }
     }
 
-    fn back(&mut self, cx: &mut Context<Self>) {
+    fn back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.screen {
             Screen::Working => {}
             Screen::License => {
                 self.screen = Screen::Choose;
                 cx.notify();
             }
-            Screen::Done => self.finish(cx),
-            _ => cx.quit(),
+            Screen::Done => self.finish(window),
+            _ => window.remove_window(),
         }
     }
 
-    fn finish(&mut self, cx: &mut Context<Self>) {
+    /// Closing the window ends the program (gpui's quit does not close it from a click on Windows).
+    fn finish(&mut self, window: &mut Window) {
         if self.installing() && self.launch {
             system::launch(&self.dir.join(system::EXE));
         }
-        cx.quit();
+        window.remove_window();
     }
 
     fn pick_dir(&mut self, cx: &mut Context<Self>) {
@@ -523,23 +524,23 @@ impl Setup {
                     Action::Update => tr!("Actualizar", "Update"),
                     Action::Reinstall => tr!("Reinstalar", "Reinstall"),
                 };
-                row.child(button("cancel", tr!("Cancelar", "Cancel"), None).on_click(cx.listener(|s, _, _, cx| s.back(cx))))
-                    .child(primary("go", go, false).on_click(cx.listener(|s, _, _, cx| s.primary(cx))))
+                row.child(button("cancel", tr!("Cancelar", "Cancel"), None).on_click(cx.listener(|s, _, w, cx| s.back(w, cx))))
+                    .child(primary("go", go, false).on_click(cx.listener(|s, _, w, cx| s.primary(w, cx))))
             }
             Screen::Choose => row
-                .child(button("cancel", tr!("Cancelar", "Cancel"), None).on_click(cx.listener(|s, _, _, cx| s.back(cx))))
-                .child(primary("go", tr!("Desinstalar", "Uninstall"), true).on_click(cx.listener(|s, _, _, cx| s.primary(cx)))),
+                .child(button("cancel", tr!("Cancelar", "Cancel"), None).on_click(cx.listener(|s, _, w, cx| s.back(w, cx))))
+                .child(primary("go", tr!("Desinstalar", "Uninstall"), true).on_click(cx.listener(|s, _, w, cx| s.primary(w, cx)))),
             Screen::Working => row,
             Screen::Done => {
                 let text = if self.installing() { tr!("Terminar", "Finish") } else { tr!("Cerrar", "Close") };
-                row.child(primary("finish", text, false).on_click(cx.listener(|s, _, _, cx| s.finish(cx))))
+                row.child(primary("finish", text, false).on_click(cx.listener(|s, _, w, _| s.finish(w))))
             }
             Screen::Failed(_) => {
                 let retry = !matches!(self.mode, Mode::Install(None));
-                row.child(button("close", tr!("Cerrar", "Close"), None).on_click(cx.listener(|_, _, _, cx| cx.quit())))
+                row.child(button("close", tr!("Cerrar", "Close"), None).on_click(cx.listener(|_, _, w, _| w.remove_window())))
                     .when(retry, |d| d.child(primary("retry", tr!("Reintentar", "Try again"), false).on_click(cx.listener(|s, _, _, cx| s.start(cx)))))
             }
-            Screen::License => row.child(primary("back", tr!("Volver", "Back"), false).on_click(cx.listener(|s, _, _, cx| s.primary(cx)))),
+            Screen::License => row.child(primary("back", tr!("Volver", "Back"), false).on_click(cx.listener(|s, _, w, cx| s.primary(w, cx)))),
         }
     }
 
@@ -588,8 +589,8 @@ impl Setup {
                         tr!("Desinstalador", "Uninstall")
                     })),
             )
-            .child(caption("min", "minus", HOVER()).on_click(|_, window, _| window.minimize_window()))
-            .when(!busy, |d| d.child(caption("close", "x", DANGER()).on_click(|_, _, cx| cx.quit())))
+            .child(caption("caption-min", "minus", HOVER()).on_click(|_, window, _| window.minimize_window()))
+            .when(!busy, |d| d.child(caption("caption-close", "x", DANGER()).on_click(|_, window, _| window.remove_window())))
     }
 }
 
@@ -604,8 +605,8 @@ impl Render for Setup {
         };
         div()
             .track_focus(&self.focus)
-            .on_action(cx.listener(|s, _: &Primary, _, cx| s.primary(cx)))
-            .on_action(cx.listener(|s, _: &Back, _, cx| s.back(cx)))
+            .on_action(cx.listener(|s, _: &Primary, w, cx| s.primary(w, cx)))
+            .on_action(cx.listener(|s, _: &Back, w, cx| s.back(w, cx)))
             .size_full()
             .flex()
             .flex_col()
