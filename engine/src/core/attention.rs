@@ -1,14 +1,14 @@
-//! Scaled dot-product attention for bf16 q/k/v with fp32 scores and softmax (what flash attention does), in
-//! query chunks so a 1536 px canvas never materialises a full multi-GB score matrix.
-//! QK^T runs on the tensor cores with fp32 output (cuBLAS strided-batched GemmEx 16BF -> 32F).
+//! Scaled dot-product attention for q/k/v in the activation type (bf16, or f32 on cards without bf16) with fp32
+//! scores and softmax (what flash attention does), in query chunks so a 1536 px canvas never materialises a full
+//! multi-GB score matrix. QK^T is one cuBLAS strided-batched GemmEx with fp32 output (on the tensor cores for bf16).
 use anyhow::Result;
 use candle_core::backend::BackendStorage;
 use candle_core::cuda_backend::CudaStorage;
 use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
-use candle_core::{CustomOp2, D, DType, Layout, Shape, Tensor};
+use candle_core::{CustomOp2, DType, Layout, Shape, Tensor};
 use cudarc::cublas::sys as cbs;
 
-/// (q [n, sq, d] bf16, k [n, sk, d] bf16) -> scale * q @ k^T as f32 [n, sq, sk].
+/// (q [n, sq, d], k [n, sk, d], both bf16 or both f32) -> scale * q @ k^T as f32 [n, sq, sk].
 struct ScoresF32 {
     scale: f32,
 }
@@ -34,51 +34,60 @@ impl CustomOp2 for ScoresF32 {
         if n != n2 || d != d2 || !ql.is_contiguous() || !kl.is_contiguous() {
             candle_core::bail!("scores_f32: bad shapes {:?} {:?}", ql.shape(), kl.shape());
         }
-        let q = qs.as_cuda_slice::<half::bf16>()?.slice(ql.start_offset()..);
-        let k = ks.as_cuda_slice::<half::bf16>()?.slice(kl.start_offset()..);
-        let mut out = unsafe { stream.alloc::<f32>(n * sq * sk) }.map_err(candle_core::Error::wrap)?;
-        {
-            let blas = dev.cublas_handle();
-            let (kp, _a) = k.device_ptr(&stream);
-            let (qp, _b) = q.device_ptr(&stream);
-            let (op, _c) = out.device_ptr_mut(&stream);
-            let (alpha, beta) = (self.scale, 0f32);
-            // column-major: S^T [sk, sq] = K [sk, d] (op T on the d x sk view) * Q^T [d, sq]
-            unsafe {
-                cudarc::cublas::result::gemm_strided_batched_ex(
-                    *blas.handle(),
-                    cbs::cublasOperation_t::CUBLAS_OP_T,
-                    cbs::cublasOperation_t::CUBLAS_OP_N,
-                    sk as i32,
-                    sq as i32,
-                    d as i32,
-                    &alpha as *const f32 as *const _,
-                    kp as *const _,
-                    cbs::cudaDataType::CUDA_R_16BF,
-                    d as i32,
-                    (sk * d) as i64,
-                    qp as *const _,
-                    cbs::cudaDataType::CUDA_R_16BF,
-                    d as i32,
-                    (sq * d) as i64,
-                    &beta as *const f32 as *const _,
-                    op as *mut _,
-                    cbs::cudaDataType::CUDA_R_32F,
-                    sk as i32,
-                    (sq * sk) as i64,
-                    n as i32,
-                    cbs::cublasComputeType_t::CUBLAS_COMPUTE_32F,
-                    cbs::cublasGemmAlgo_t::CUBLAS_GEMM_DEFAULT,
-                )
-            }
-            .map_err(candle_core::Error::wrap)?;
+        macro_rules! scores {
+            ($t:ty, $cdt:expr) => {{
+                let q = qs.as_cuda_slice::<$t>()?.slice(ql.start_offset()..);
+                let k = ks.as_cuda_slice::<$t>()?.slice(kl.start_offset()..);
+                let mut out = unsafe { stream.alloc::<f32>(n * sq * sk) }.map_err(candle_core::Error::wrap)?;
+                {
+                    let blas = dev.cublas_handle();
+                    let (kp, _a) = k.device_ptr(&stream);
+                    let (qp, _b) = q.device_ptr(&stream);
+                    let (op, _c) = out.device_ptr_mut(&stream);
+                    let (alpha, beta) = (self.scale, 0f32);
+                    // column-major: S^T [sk, sq] = K [sk, d] (op T on the d x sk view) * Q^T [d, sq]
+                    unsafe {
+                        cudarc::cublas::result::gemm_strided_batched_ex(
+                            *blas.handle(),
+                            cbs::cublasOperation_t::CUBLAS_OP_T,
+                            cbs::cublasOperation_t::CUBLAS_OP_N,
+                            sk as i32,
+                            sq as i32,
+                            d as i32,
+                            &alpha as *const f32 as *const _,
+                            kp as *const _,
+                            $cdt,
+                            d as i32,
+                            (sk * d) as i64,
+                            qp as *const _,
+                            $cdt,
+                            d as i32,
+                            (sq * d) as i64,
+                            &beta as *const f32 as *const _,
+                            op as *mut _,
+                            cbs::cudaDataType::CUDA_R_32F,
+                            sk as i32,
+                            (sq * sk) as i64,
+                            n as i32,
+                            cbs::cublasComputeType_t::CUBLAS_COMPUTE_32F,
+                            cbs::cublasGemmAlgo_t::CUBLAS_GEMM_DEFAULT,
+                        )
+                    }
+                    .map_err(candle_core::Error::wrap)?;
+                }
+                Ok((CudaStorage::wrap_cuda_slice(out, dev), Shape::from((n, sq, sk))))
+            }};
         }
-        Ok((CudaStorage::wrap_cuda_slice(out, dev), Shape::from((n, sq, sk))))
+        match qs.dtype() {
+            DType::BF16 => scores!(half::bf16, cbs::cudaDataType::CUDA_R_16BF),
+            DType::F32 => scores!(f32, cbs::cudaDataType::CUDA_R_32F),
+            dt => candle_core::bail!("scores_f32: q/k in {dt:?}"),
+        }
     }
 }
 
-/// q [b, h, sq, d], k/v [b, h, sk, d] (bf16); `valid` [b, sk] u8 masks keys; `causal` limits query i to keys <= i.
-/// fp32 scores on the tensor cores, fused masked softmax straight to bf16, then P @ V.
+/// q [b, h, sq, d], k/v [b, h, sk, d] (activation type); `valid` [b, sk] u8 masks keys; `causal` limits query i to
+/// keys <= i. fp32 scores, fused masked softmax straight to the activation type, then P @ V.
 pub fn sdpa(q: &Tensor, k: &Tensor, v: &Tensor, valid: Option<&Tensor>, causal: bool) -> Result<Tensor> {
     let (b, h, sq, d) = q.dims4()?;
     let sk = k.dim(2)?;
@@ -126,9 +135,4 @@ pub fn causal_bias(valid: &Tensor) -> Result<Tensor> {
     let mask: Vec<f32> = (0..s * s).map(|i| if i % s <= i / s { 0. } else { f32::NEG_INFINITY }).collect();
     let causal = Tensor::from_vec(mask, (1, 1, s, s), dev)?;
     Ok(causal.broadcast_add(&key_bias(valid)?)?)
-}
-
-#[allow(dead_code)]
-fn _last(t: &Tensor) -> Result<usize> {
-    Ok(t.dim(D::Minus1)?)
 }

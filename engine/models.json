@@ -24,7 +24,6 @@
     },
     "krea2": {
       "label": "Krea 2",
-      "min_compute": [8, 0],
       "repo": "krea/Krea-2-Raw",
       "variants": {
         "base": {"name": "Raw", "label": "Krea 2 Raw", "steps": 30},

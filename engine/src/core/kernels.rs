@@ -1,5 +1,7 @@
 //! Hand-written CUDA kernels, compiled once with NVRTC at runtime (no nvcc needed on the user's machine).
-//! bf16 is handled as raw u16 so the source needs no CUDA headers.
+//! bf16 is handled as raw u16 so the source needs no CUDA headers and builds for any card. Kernels the f32 activation
+//! path also uses (cards without bf16, see core::act_dtype) are templates over the storage type: `name` is the bf16
+//! one, `name_f32` the f32 one.
 use candle_core::Result;
 use candle_core::cuda_backend::CudaDevice;
 use candle_core::cuda_backend::cudarc::driver::{CudaFunction, CudaModule};
@@ -15,15 +17,19 @@ __device__ __forceinline__ unsigned short f2bf(float f) {
     return (unsigned short)(u >> 16);
 }
 
+// storage types: load as f32, store from f32
+struct Bf16 { typedef unsigned short T; static __device__ float ld(T h) { return bf2f(h); } static __device__ T st(float f) { return f2bf(f); } };
+struct F32 { typedef float T; static __device__ float ld(T v) { return v; } static __device__ T st(float f) { return f; } };
+
 // Per-row symmetric int8 activation quantization (toolkit convrot int8_act_quant_kernel):
 // scale = amax / qmax (1 when amax == 0), q = rint(x / scale) clamped. One block per row.
-extern "C" __global__ void act_quant_bf16(const unsigned short* x, signed char* q, float* scales, int K, float qmax) {
+template <class D> __device__ void act_quant_t(const typename D::T* x, signed char* q, float* scales, int K, float qmax) {
     int row = blockIdx.x;
-    const unsigned short* xr = x + (size_t)row * K;
+    const typename D::T* xr = x + (size_t)row * K;
     signed char* qr = q + (size_t)row * K;
     __shared__ float red[256];
     float m = 0.f;
-    for (int i = threadIdx.x; i < K; i += blockDim.x) m = fmaxf(m, fabsf(bf2f(xr[i])));
+    for (int i = threadIdx.x; i < K; i += blockDim.x) m = fmaxf(m, fabsf(D::ld(xr[i])));
     red[threadIdx.x] = m;
     __syncthreads();
     for (int s = blockDim.x / 2; s > 0; s >>= 1) {
@@ -33,20 +39,24 @@ extern "C" __global__ void act_quant_bf16(const unsigned short* x, signed char* 
     float amax = red[0];
     float scale = amax > 0.f ? amax / qmax : 1.f;
     for (int i = threadIdx.x; i < K; i += blockDim.x) {
-        float v = rintf(bf2f(xr[i]) / scale);
+        float v = rintf(D::ld(xr[i]) / scale);
         v = fminf(fmaxf(v, -qmax), qmax);
         qr[i] = (signed char)v;
     }
     if (threadIdx.x == 0) scales[row] = scale;
 }
+extern "C" __global__ void act_quant(const unsigned short* x, signed char* q, float* s, int K, float m) { act_quant_t<Bf16>(x, q, s, K, m); }
+extern "C" __global__ void act_quant_f32(const float* x, signed char* q, float* s, int K, float m) { act_quant_t<F32>(x, q, s, K, m); }
 
-// out[r, c] = bf16((float(acc) * w_scale[c]) * a_scale[r])   (toolkit _int8_epilogue, same op order)
-extern "C" __global__ void int8_epilogue(const int* acc, const float* a_s, const float* w_s, unsigned short* out, int M, int N) {
+// out[r, c] = (float(acc) * w_scale[c]) * a_scale[r] in the activation type (toolkit _int8_epilogue, same op order)
+template <class D> __device__ void int8_epilogue_t(const int* acc, const float* a_s, const float* w_s, typename D::T* out, int M, int N) {
     size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= (size_t)M * N) return;
     int r = i / N, c = i % N;
-    out[i] = f2bf(((float)acc[i] * w_s[c]) * a_s[r]);
+    out[i] = D::st(((float)acc[i] * w_s[c]) * a_s[r]);
 }
+extern "C" __global__ void int8_epilogue(const int* acc, const float* a, const float* w, unsigned short* o, int M, int N) { int8_epilogue_t<Bf16>(acc, a, w, o, M, N); }
+extern "C" __global__ void int8_epilogue_f32(const int* acc, const float* a, const float* w, float* o, int M, int N) { int8_epilogue_t<F32>(acc, a, w, o, M, N); }
 
 // Signed int8 rows times their per-row scale -> f32 (int8 embedding rows before the inverse rotation).
 extern "C" __global__ void i8_rows_to_f32(const signed char* q, const float* s, float* out, int rows, int K) {
@@ -101,13 +111,14 @@ extern "C" __global__ void qk_norm_rope(const unsigned short* x, const unsigned 
     o[2 * j + 1] = f2bf(y0 * sn + y1 * c);
 }
 
-// masked softmax of fp32 scores [B*H*n, sk] -> bf16 P. Keys with valid[b, k] == 0 get 0; causal: k <= q0 + qi.
-extern "C" __global__ void softmax_mask(const float* sc, const unsigned char* valid, unsigned short* p,
-                                        int sk, int n, int H, int causal, int q0, int has_valid) {
+// masked softmax of fp32 scores [B*H*n, sk] -> P in the activation type. Keys with valid[b, k] == 0 get 0;
+// causal: k <= q0 + qi.
+template <class D> __device__ void softmax_mask_t(const float* sc, const unsigned char* valid, typename D::T* p,
+                                                int sk, int n, int H, int causal, int q0, int has_valid) {
     int row = blockIdx.x;
     int qi = row % n, b = (row / n) / H;
     const float* r = sc + (size_t)row * sk;
-    unsigned short* pr = p + (size_t)row * sk;
+    typename D::T* pr = p + (size_t)row * sk;
     const unsigned char* vb = valid + (size_t)b * sk;
     int lim = causal ? min(sk, q0 + qi + 1) : sk;
     __shared__ float red[256];
@@ -123,8 +134,14 @@ extern "C" __global__ void softmax_mask(const float* sc, const unsigned char* va
     float inv = 1.f / red[0];
     for (int k = threadIdx.x; k < sk; k += blockDim.x) {
         bool ok = k < lim && (!has_valid || vb[k]);
-        pr[k] = f2bf(ok ? __expf(r[k] - m) * inv : 0.f);
+        pr[k] = D::st(ok ? __expf(r[k] - m) * inv : 0.f);
     }
+}
+extern "C" __global__ void softmax_mask(const float* sc, const unsigned char* v, unsigned short* p, int sk, int n, int H, int c, int q0, int hv) {
+    softmax_mask_t<Bf16>(sc, v, p, sk, n, H, c, q0, hv);
+}
+extern "C" __global__ void softmax_mask_f32(const float* sc, const unsigned char* v, float* p, int sk, int n, int H, int c, int q0, int hv) {
+    softmax_mask_t<F32>(sc, v, p, sk, n, H, c, q0, hv);
 }
 
 // gu [M, 2F] -> bf16(bf16(silu(gate)) * up)
@@ -174,11 +191,11 @@ pub fn func(dev: &CudaDevice, name: &str) -> Result<CudaFunction> {
 
 #[cfg(test)]
 mod tests {
-    /// The engine's kernels compile for every architecture Dotsmith supports: RTX 30 (sm_86), 40 (sm_89), 50 (sm_120),
-    /// A100 / H100 / B200 (sm_80 / 90 / 100). Needs NVRTC, not the GPU.
+    /// The engine's kernels compile for every architecture this NVRTC targets: RTX 20 (sm_75), 30 (sm_86), 40 (sm_89),
+    /// 50 (sm_120), A100 / H100 / B200 (sm_80 / 90 / 100). Needs NVRTC, not the GPU.
     #[test]
     fn kernels_compile_for_every_supported_gpu() {
-        for arch in ["compute_80", "compute_86", "compute_89", "compute_90", "compute_100", "compute_120"] {
+        for arch in ["compute_75", "compute_80", "compute_86", "compute_89", "compute_90", "compute_100", "compute_120"] {
             let opts = cudarc::nvrtc::CompileOptions { arch: Some(arch), ..Default::default() };
             if let Err(e) = cudarc::nvrtc::compile_ptx_with_opts(super::SRC, opts) {
                 panic!("{arch}: {e:?}");

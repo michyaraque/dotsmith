@@ -3,7 +3,7 @@
 //!   x_rot = x @ blockdiag(H)            (regular Hadamard, block = min(256, largest power-of-4 divisor of in))
 //!   aq, a_s = per-row int8 quant of x_rot (amax / 127, round half to even)
 //!   y = (int32(aq @ Wq^T) * w_s) * a_s   on the int8 tensor cores (cuBLAS GemmEx, 32-bit integer accumulate)
-//! plus unmerged LoRA deltas: y += (x @ A^T) @ B^T * scale, in bf16.
+//! plus unmerged LoRA deltas: y += (x @ A^T) @ B^T * scale, in the activation type (core::act_dtype).
 use anyhow::{Context, Result, bail};
 use candle_core::backend::BackendStorage;
 use candle_core::cuda_backend::CudaStorage;
@@ -13,8 +13,8 @@ use cudarc::cublas::sys as cbs;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use crate::core::kernels;
 use crate::core::weights::Weights;
+use crate::core::{act_dtype, kernels};
 
 pub fn largest_pow4_divisor(d: usize) -> usize {
     let mut p = 1;
@@ -72,7 +72,8 @@ pub fn rotate(x: &Tensor, rot: usize) -> Result<Tensor> {
     Ok(flat.matmul(&h)?.reshape(dims.as_slice())?)
 }
 
-/// int8 GEMM + act quant + epilogue as one candle op: (x_rot bf16 [m,k], w u8-as-i8 [n,k], w_scale f32 [n]) -> bf16 [m,n].
+/// int8 GEMM + act quant + epilogue as one candle op: (x_rot [m,k], w u8-as-i8 [n,k], w_scale f32 [n]) -> [m,n] in the
+/// activation type (bf16, or f32 on cards without bf16).
 struct W8A8;
 
 impl CustomOp3 for W8A8 {
@@ -106,62 +107,73 @@ impl CustomOp3 for W8A8 {
         if k != k2 || !xl.is_contiguous() || !wl.is_contiguous() || !sl.is_contiguous() {
             candle_core::bail!("w8a8: bad layout x{:?} w{:?}", xl.shape(), wl.shape());
         }
-        let x = xs.as_cuda_slice::<half::bf16>()?.slice(xl.start_offset()..);
-        let w = ws.as_cuda_slice::<u8>()?.slice(wl.start_offset()..);
-        let s = ss.as_cuda_slice::<f32>()?.slice(sl.start_offset()..);
-        let mp = m.div_ceil(4) * 4; // GemmEx int8: keep every leading dim a multiple of 4
-        let mut aq = unsafe { stream.alloc::<i8>(mp * k) }.map_err(candle_core::Error::wrap)?;
-        if mp != m {
-            stream.memset_zeros(&mut aq.slice_mut(m * k..)).map_err(candle_core::Error::wrap)?;
+        // the activations are bf16, or f32 on the build for cards without bf16 (core::act_dtype)
+        macro_rules! w8a8 {
+            ($t:ty, $quant:literal, $epilogue:literal) => {{
+                let x = xs.as_cuda_slice::<$t>()?.slice(xl.start_offset()..);
+                let w = ws.as_cuda_slice::<u8>()?.slice(wl.start_offset()..);
+                let s = ss.as_cuda_slice::<f32>()?.slice(sl.start_offset()..);
+                let mp = m.div_ceil(4) * 4; // GemmEx int8: keep every leading dim a multiple of 4
+                let mut aq = unsafe { stream.alloc::<i8>(mp * k) }.map_err(candle_core::Error::wrap)?;
+                if mp != m {
+                    stream.memset_zeros(&mut aq.slice_mut(m * k..)).map_err(candle_core::Error::wrap)?;
+                }
+                let mut a_s = unsafe { stream.alloc::<f32>(mp) }.map_err(candle_core::Error::wrap)?;
+                let f = kernels::func(&dev, $quant)?;
+                let mut b = stream.launch_builder(&f);
+                let (ki, qmax) = (k as i32, 127f32);
+                b.arg(&x).arg(&mut aq).arg(&mut a_s).arg(&ki).arg(&qmax);
+                unsafe { b.launch(LaunchConfig { grid_dim: (m as u32, 1, 1), block_dim: (256, 1, 1), shared_mem_bytes: 0 }) }
+                    .map_err(candle_core::Error::wrap)?;
+                let mut acc = unsafe { stream.alloc::<i32>(mp * n) }.map_err(candle_core::Error::wrap)?;
+                {
+                    let blas = dev.cublas_handle();
+                    let (wp, _g1) = w.device_ptr(&stream);
+                    let (ap, _g2) = aq.device_ptr(&stream);
+                    let (cp, _g3) = acc.device_ptr_mut(&stream);
+                    let (alpha, beta) = (1i32, 0i32);
+                    // column-major view: C^T[n, mp] = W[n, k] (op T on the k x n col-major view) * A^T[k, mp]
+                    unsafe {
+                        cudarc::cublas::result::gemm_ex(
+                            *blas.handle(),
+                            cbs::cublasOperation_t::CUBLAS_OP_T,
+                            cbs::cublasOperation_t::CUBLAS_OP_N,
+                            n as i32,
+                            mp as i32,
+                            k as i32,
+                            &alpha as *const i32 as *const _,
+                            wp as *const _,
+                            cbs::cudaDataType::CUDA_R_8I,
+                            k as i32,
+                            ap as *const _,
+                            cbs::cudaDataType::CUDA_R_8I,
+                            k as i32,
+                            &beta as *const i32 as *const _,
+                            cp as *mut _,
+                            cbs::cudaDataType::CUDA_R_32I,
+                            n as i32,
+                            cbs::cublasComputeType_t::CUBLAS_COMPUTE_32I,
+                            cbs::cublasGemmAlgo_t::CUBLAS_GEMM_DEFAULT,
+                        )
+                    }
+                    .map_err(candle_core::Error::wrap)?;
+                }
+                let mut out = unsafe { stream.alloc::<$t>(m * n) }.map_err(candle_core::Error::wrap)?;
+                let f = kernels::func(&dev, $epilogue)?;
+                let mut b = stream.launch_builder(&f);
+                let (mi, ni) = (m as i32, n as i32);
+                b.arg(&acc).arg(&a_s).arg(&s).arg(&mut out).arg(&mi).arg(&ni);
+                let total = (m * n) as u32;
+                unsafe { b.launch(LaunchConfig { grid_dim: (total.div_ceil(256), 1, 1), block_dim: (256, 1, 1), shared_mem_bytes: 0 }) }
+                    .map_err(candle_core::Error::wrap)?;
+                Ok((CudaStorage::wrap_cuda_slice(out, dev), Shape::from((m, n))))
+            }};
         }
-        let mut a_s = unsafe { stream.alloc::<f32>(mp) }.map_err(candle_core::Error::wrap)?;
-        let f = kernels::func(&dev, "act_quant_bf16")?;
-        let mut b = stream.launch_builder(&f);
-        let (ki, qmax) = (k as i32, 127f32);
-        b.arg(&x).arg(&mut aq).arg(&mut a_s).arg(&ki).arg(&qmax);
-        unsafe { b.launch(LaunchConfig { grid_dim: (m as u32, 1, 1), block_dim: (256, 1, 1), shared_mem_bytes: 0 }) }.map_err(candle_core::Error::wrap)?;
-        let mut acc = unsafe { stream.alloc::<i32>(mp * n) }.map_err(candle_core::Error::wrap)?;
-        {
-            let blas = dev.cublas_handle();
-            let (wp, _g1) = w.device_ptr(&stream);
-            let (ap, _g2) = aq.device_ptr(&stream);
-            let (cp, _g3) = acc.device_ptr_mut(&stream);
-            let (alpha, beta) = (1i32, 0i32);
-            // column-major view: C^T[n, mp] = W[n, k] (op T on the k x n col-major view) * A^T[k, mp]
-            unsafe {
-                cudarc::cublas::result::gemm_ex(
-                    *blas.handle(),
-                    cbs::cublasOperation_t::CUBLAS_OP_T,
-                    cbs::cublasOperation_t::CUBLAS_OP_N,
-                    n as i32,
-                    mp as i32,
-                    k as i32,
-                    &alpha as *const i32 as *const _,
-                    wp as *const _,
-                    cbs::cudaDataType::CUDA_R_8I,
-                    k as i32,
-                    ap as *const _,
-                    cbs::cudaDataType::CUDA_R_8I,
-                    k as i32,
-                    &beta as *const i32 as *const _,
-                    cp as *mut _,
-                    cbs::cudaDataType::CUDA_R_32I,
-                    n as i32,
-                    cbs::cublasComputeType_t::CUBLAS_COMPUTE_32I,
-                    cbs::cublasGemmAlgo_t::CUBLAS_GEMM_DEFAULT,
-                )
-            }
-            .map_err(candle_core::Error::wrap)?;
+        match xs.dtype() {
+            DType::BF16 => w8a8!(half::bf16, "act_quant", "int8_epilogue"),
+            DType::F32 => w8a8!(f32, "act_quant_f32", "int8_epilogue_f32"),
+            dt => candle_core::bail!("w8a8: activations in {dt:?}"),
         }
-        let mut out = unsafe { stream.alloc::<half::bf16>(m * n) }.map_err(candle_core::Error::wrap)?;
-        let f = kernels::func(&dev, "int8_epilogue")?;
-        let mut b = stream.launch_builder(&f);
-        let (mi, ni) = (m as i32, n as i32);
-        b.arg(&acc).arg(&a_s).arg(&s).arg(&mut out).arg(&mi).arg(&ni);
-        let total = (m * n) as u32;
-        unsafe { b.launch(LaunchConfig { grid_dim: (total.div_ceil(256), 1, 1), block_dim: (256, 1, 1), shared_mem_bytes: 0 }) }
-            .map_err(candle_core::Error::wrap)?;
-        Ok((CudaStorage::wrap_cuda_slice(out, dev), Shape::from((m, n))))
     }
 }
 
@@ -206,7 +218,7 @@ impl QLinear {
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let dims = x.dims().to_vec();
         let m = x.elem_count() / self.in_f;
-        let x2 = x.to_dtype(DType::BF16)?.reshape((m, self.in_f))?;
+        let x2 = x.to_dtype(act_dtype())?.reshape((m, self.in_f))?;
         let xr = rotate(&x2, self.rot)?.contiguous()?;
         // weights kept in RAM (weight streaming's cold layers): uploaded for this call only, same numerics
         let mut y = if self.w.device().is_cpu() && !x.device().is_cpu() {
@@ -224,7 +236,7 @@ impl QLinear {
     }
 }
 
-/// A plain bf16 linear (the modules the checkpoint keeps unquantized), with the same LoRA hook.
+/// A plain linear in the activation type (the modules the checkpoint keeps unquantized), with the same LoRA hook.
 pub struct Linear {
     pub w: Tensor, // [out, in] ([out, 0] placeholder when `q` holds the weight)
     pub b: Option<Tensor>,
@@ -238,21 +250,21 @@ impl Linear {
         let name = format!("{prefix}.weight");
         let (w, q) = if wt.is_quantized(&name) {
             let q = wt.qtensor(&name, dev)?;
-            (Tensor::zeros((q.shape().dims()[0], 0), DType::BF16, dev)?, Some(q))
+            (Tensor::zeros((q.shape().dims()[0], 0), act_dtype(), dev)?, Some(q))
         } else {
-            (wt.tensor(&name, dev)?.to_dtype(DType::BF16)?, None)
+            (wt.tensor_act(&name, dev)?, None)
         };
-        let b = if bias { Some(wt.tensor(&format!("{prefix}.bias"), dev)?.to_dtype(DType::BF16)?) } else { None };
+        let b = if bias { Some(wt.tensor_act(&format!("{prefix}.bias"), dev)?) } else { None };
         Ok(Self { w, b, loras: vec![], q })
     }
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let dims = x.dims().to_vec();
         let k = *dims.last().unwrap();
-        let x2 = x.to_dtype(DType::BF16)?.reshape((x.elem_count() / k, k))?;
+        let x2 = x.to_dtype(act_dtype())?.reshape((x.elem_count() / k, k))?;
         // weights kept in RAM (weight streaming's cold layers) are uploaded for this call only, same numerics
         let host = self.w.device().is_cpu() && !x.device().is_cpu();
         let mut y = match &self.q {
-            Some(q) => x2.matmul(&q.dequantize_f16(x.device())?.to_dtype(DType::BF16)?.t()?)?,
+            Some(q) => x2.matmul(&q.dequantize_f16(x.device())?.to_dtype(act_dtype())?.t()?)?,
             None if host => x2.matmul(&self.w.to_device(x.device())?.t()?)?,
             None => x2.matmul(&self.w.t()?)?,
         };
@@ -288,13 +300,13 @@ impl GLinear {
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let dims = x.dims().to_vec();
         let m = x.elem_count() / self.in_f;
-        let x2 = x.to_dtype(DType::BF16)?.reshape((m, self.in_f))?;
+        let x2 = x.to_dtype(act_dtype())?.reshape((m, self.in_f))?;
         let w = if self.w.device().is_cpu() {
             // block swap: the quantized weight lives in RAM and is uploaded for this call only
             let g = candle_core::quantized::ggml_file::qtensor_from_ggml(self.w.dtype(), &self.w.data()?, self.w.shape().dims().to_vec(), x.device())?;
-            g.dequantize_f16(x.device())?.to_dtype(DType::BF16)?
+            g.dequantize_f16(x.device())?.to_dtype(act_dtype())?
         } else {
-            self.w.dequantize_f16(x.device())?.to_dtype(DType::BF16)?
+            self.w.dequantize_f16(x.device())?.to_dtype(act_dtype())?
         };
         let mut y = x2.matmul(&w.t()?)?;
         drop(w);

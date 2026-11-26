@@ -1,9 +1,10 @@
-//! Candle wrappers for the fused kernels in kernels.rs (bf16 in / bf16 out, contiguous inputs).
+//! Candle wrappers for the fused kernels in kernels.rs (contiguous inputs; bf16, except softmax_mask, which writes the
+//! activation type).
 use anyhow::Result;
 use candle_core::backend::BackendStorage;
 use candle_core::cuda_backend::CudaStorage;
 use candle_core::cuda_backend::cudarc::driver::{LaunchConfig, PushKernelArg};
-use candle_core::{CpuStorage, CustomOp1, CustomOp2, CustomOp3, Layout, Shape, Tensor};
+use candle_core::{CpuStorage, CustomOp1, CustomOp2, CustomOp3, DType, Layout, Shape, Tensor};
 use half::bf16;
 
 use crate::core::kernels;
@@ -81,7 +82,7 @@ pub fn qk_norm_rope(x: &Tensor, w: &Tensor, cs: &Tensor) -> Result<Tensor> {
     Ok(x.contiguous()?.apply_op3_no_bwd(w, cs, &QkNormRope)?)
 }
 
-/// Masked softmax of f32 scores [b*h, n, sk] -> bf16 probabilities.
+/// Masked softmax of f32 scores [b*h, n, sk] -> probabilities in the activation type (bf16, or f32 without bf16).
 struct SoftmaxMask {
     n: usize,
     heads: usize,
@@ -103,13 +104,21 @@ impl CustomOp2 for SoftmaxMask {
         let sc = ss.as_cuda_slice::<f32>()?.slice(sl.start_offset()..);
         let v = vs.as_cuda_slice::<u8>()?.slice(vl.start_offset()..);
         let has_valid = (vl.shape().elem_count() > 1) as i32;
-        let mut out = unsafe { st.alloc::<bf16>(rows * sk) }.map_err(w)?;
-        let f = kernels::func(&dev, "softmax_mask")?;
         let (ski, ni, hi, ci, qi) = (sk as i32, self.n as i32, self.heads as i32, self.causal as i32, self.q0 as i32);
-        let mut l = st.launch_builder(&f);
-        l.arg(&sc).arg(&v).arg(&mut out).arg(&ski).arg(&ni).arg(&hi).arg(&ci).arg(&qi).arg(&has_valid);
-        unsafe { l.launch(cfg(rows as u32, 256)) }.map_err(w)?;
-        Ok((CudaStorage::wrap_cuda_slice(out, dev), sl.shape().clone()))
+        macro_rules! run {
+            ($t:ty, $kernel:literal) => {{
+                let mut out = unsafe { st.alloc::<$t>(rows * sk) }.map_err(w)?;
+                let f = kernels::func(&dev, $kernel)?;
+                let mut l = st.launch_builder(&f);
+                l.arg(&sc).arg(&v).arg(&mut out).arg(&ski).arg(&ni).arg(&hi).arg(&ci).arg(&qi).arg(&has_valid);
+                unsafe { l.launch(cfg(rows as u32, 256)) }.map_err(w)?;
+                Ok((CudaStorage::wrap_cuda_slice(out, dev), sl.shape().clone()))
+            }};
+        }
+        match crate::core::act_dtype() {
+            DType::F32 => run!(f32, "softmax_mask_f32"),
+            _ => run!(bf16, "softmax_mask"),
+        }
     }
 }
 /// scores [b*h, n, sk] f32, valid [b, sk] u8 (a 1-element tensor = every key valid).

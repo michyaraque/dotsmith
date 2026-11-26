@@ -168,6 +168,14 @@ impl Weights {
         Ok(Tensor::from_raw_buffer(b, dt, &e.shape, dev)?)
     }
 
+    /// A float tensor in the activation type (core::act_dtype): bf16 converted on the GPU, f32 widened on the CPU.
+    pub fn tensor_act(&self, name: &str, dev: &Device) -> Result<Tensor> {
+        match crate::core::act_dtype() {
+            DType::F32 => self.tensor_f32(name, dev),
+            dt => Ok(self.tensor(name, dev)?.to_dtype(dt)?),
+        }
+    }
+
     /// A float tensor as f32, widened on the CPU while it is read: cards before Ampere have no bf16 kernels to do it.
     pub fn tensor_f32(&self, name: &str, dev: &Device) -> Result<Tensor> {
         let (b, e) = self.bytes(name)?;

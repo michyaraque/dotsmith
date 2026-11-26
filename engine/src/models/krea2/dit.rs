@@ -11,6 +11,7 @@
 use anyhow::Result;
 use candle_core::{D, DType, Device, Tensor};
 
+use crate::core::act_dtype;
 use crate::core::attention::sdpa;
 use crate::core::int8::{AnyLinear, Linear, Lora};
 use crate::core::memory::{Stack, StackPlan};
@@ -60,7 +61,7 @@ impl Rms {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let xf = x.to_dtype(DType::F32)?;
         let r = (xf.sqr()?.mean_keepdim(D::Minus1)? + EPS)?.sqrt()?.recip()?;
-        Ok(xf.broadcast_mul(&r)?.broadcast_mul(&self.w)?.to_dtype(DType::BF16)?)
+        Ok(xf.broadcast_mul(&r)?.broadcast_mul(&self.w)?.to_dtype(act_dtype())?)
     }
 }
 
@@ -255,7 +256,7 @@ fn temb(t: &[f32], dev: &Device) -> Result<Tensor> {
         v.extend(args.iter().map(|a| a.cos()));
         v.extend(args.iter().map(|a| a.sin()));
     }
-    Ok(Tensor::from_vec(v, (t.len(), 1, 2 * half), dev)?.to_dtype(DType::BF16)?)
+    Ok(Tensor::from_vec(v, (t.len(), 1, 2 * half), dev)?.to_dtype(act_dtype())?)
 }
 
 fn gelu_tanh(x: &Tensor) -> Result<Tensor> {
@@ -318,7 +319,7 @@ impl Krea {
             };
             let p = format!("blocks.{i}");
             blocks.push(Block {
-                lin: wt.tensor(&format!("{p}.mod.lin"), dev)?.to_dtype(DType::BF16)?,
+                lin: wt.tensor_act(&format!("{p}.mod.lin"), dev)?,
                 pre: Rms::load(&wt, &format!("{p}.prenorm"), dev)?,
                 post: Rms::load(&wt, &format!("{p}.postnorm"), dev)?,
                 attn: Attn::load(&wt, &format!("{p}.attn"), dev, place)?,
@@ -341,14 +342,14 @@ impl Krea {
             t2: cold_lin("tmlp.2")?,
             tproj: cold_lin("tproj.1")?,
             layerwise: fb("layerwise_blocks")?,
-            projector: wt.tensor("txtfusion.projector.weight", dev)?.to_dtype(DType::BF16)?,
-            projector_base: wt.tensor("txtfusion.projector.weight", dev)?.to_dtype(DType::BF16)?,
+            projector: wt.tensor_act("txtfusion.projector.weight", dev)?,
+            projector_base: wt.tensor_act("txtfusion.projector.weight", dev)?,
             refiner: fb("refiner_blocks")?,
             txt_norm: Rms::load(&wt, "txtmlp.0", dev)?,
             txt1: cold_lin("txtmlp.1")?,
             txt2: cold_lin("txtmlp.3")?,
             last_norm: Rms::load(&wt, "last.norm", dev)?,
-            last_lin: wt.tensor("last.modulation.lin", dev)?.to_dtype(DType::BF16)?,
+            last_lin: wt.tensor_act("last.modulation.lin", dev)?,
             last: lin("last.linear", true)?,
             dim,
             dev: dev.clone(),
@@ -411,8 +412,8 @@ impl Krea {
             } else {
                 return Ok(None);
             };
-            let down = wt.tensor(&format!("{p}.{d}.weight"), &dev)?.to_dtype(DType::BF16)?;
-            let up = wt.tensor(&format!("{p}.{u}.weight"), &dev)?.to_dtype(DType::BF16)?;
+            let down = wt.tensor_act(&format!("{p}.{d}.weight"), &dev)?;
+            let up = wt.tensor_act(&format!("{p}.{u}.weight"), &dev)?;
             let rank = down.dim(0)? as f64;
             let alpha = match wt.tensor(&format!("{p}.alpha"), &Device::Cpu) {
                 Ok(a) => a.to_dtype(DType::F64)?.flatten_all()?.to_vec1::<f64>()?[0],
@@ -429,7 +430,7 @@ impl Krea {
         }
         if let Some((down, up, scale)) = pair("txtfusion.projector")? {
             let delta = (up.to_dtype(DType::F32)?.matmul(&down.to_dtype(DType::F32)?)? * scale)?; // [1, 12]
-            self.projector = (self.projector_base.to_dtype(DType::F32)? + delta)?.to_dtype(DType::BF16)?;
+            self.projector = (self.projector_base.to_dtype(DType::F32)? + delta)?.to_dtype(act_dtype())?;
             n += 1;
         }
         Ok(n)
@@ -441,7 +442,7 @@ impl Krea {
         let (mut rows, mut valid) = (vec![], vec![]);
         for p in prompts {
             let n = p.dim(0)?;
-            rows.push(p.to_dtype(DType::BF16)?.pad_with_zeros(0, 0, l - n)?);
+            rows.push(p.to_dtype(act_dtype())?.pad_with_zeros(0, 0, l - n)?);
             valid.extend((0..l).map(|i| (i < n) as u8));
         }
         let b = prompts.len();
@@ -469,7 +470,7 @@ impl Krea {
         let (hp, wp) = (h / 2, w / 2);
         let n = hp * wp;
         // patchify: b c (h ph) (w pw) -> b (h w) (c ph pw)
-        let img = latents.to_dtype(DType::BF16)?.reshape((b, c, hp, 2, wp, 2))?.permute((0, 2, 4, 1, 3, 5))?.reshape((b, n, c * 4))?;
+        let img = latents.to_dtype(act_dtype())?.reshape((b, c, hp, 2, wp, 2))?.permute((0, 2, 4, 1, 3, 5))?.reshape((b, n, c * 4))?;
         let img = self.first.forward(&img.contiguous()?)?;
         let tv = self.t2.forward(&gelu_tanh(&self.t1.forward(&temb(t, &self.dev)?)?)?)?; // [b, 1, dim]
         let tvec = self.tproj.forward(&gelu_tanh(&tv)?)?; // [b, 1, 6 dim]

@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use candle_core::{D, DType, Device, Tensor};
 use tokenizers::Tokenizer;
 
+use crate::core::act_dtype;
 use crate::core::attention::sdpa;
 use crate::core::int8::{AnyLinear, rotate};
 use crate::core::weights::Weights;
@@ -68,7 +69,7 @@ fn layer_count(wt: &Weights, prefix: &str) -> usize {
 fn rms(x: &Tensor, w: &Tensor) -> Result<Tensor> {
     let xf = x.to_dtype(DType::F32)?;
     let r = (xf.sqr()?.mean_keepdim(D::Minus1)? + EPS)?.sqrt()?.recip()?;
-    Ok(xf.broadcast_mul(&r)?.to_dtype(DType::BF16)?.broadcast_mul(w)?)
+    Ok(xf.broadcast_mul(&r)?.to_dtype(act_dtype())?.broadcast_mul(w)?)
 }
 
 fn rotate_half(x: &Tensor) -> Result<Tensor> {
@@ -116,7 +117,7 @@ impl TextEncoder {
         let mut layers = vec![];
         for i in 0..n {
             let p = join(prefix, &format!("layers.{i}"));
-            let t = |n: &str| -> Result<Tensor> { Ok(wt.tensor(&format!("{p}.{n}"), dev)?.to_dtype(DType::BF16)?) };
+            let t = |n: &str| wt.tensor_act(&format!("{p}.{n}"), dev);
             let l = |n: &str| -> Result<AnyLinear> {
                 let full = format!("{p}.{n}");
                 match &stream {
@@ -169,7 +170,8 @@ impl TextEncoder {
             for &id in ids {
                 rows.extend_from_slice(&q[id as usize * k * w..(id as usize + 1) * k * w]);
             }
-            return Ok(Tensor::from_raw_buffer(&rows, dt, &[ids.len(), k], &self.dev)?.to_dtype(DType::BF16)?.unsqueeze(0)?);
+            // widened on the CPU: cards without bf16 have no kernel for it
+            return Ok(Tensor::from_raw_buffer(&rows, dt, &[ids.len(), k], &Device::Cpu)?.to_dtype(act_dtype())?.to_device(&self.dev)?.unsqueeze(0)?);
         }
         let (s, _) = self.wt.bytes(&format!("{embed}.weight_scale"))?;
         let k = e.shape[1];
@@ -186,7 +188,7 @@ impl TextEncoder {
             1
         };
         let rows = Tensor::from_vec(v, (ids.len(), k), &self.dev)?;
-        Ok(rotate(&rows, rot)?.to_dtype(DType::BF16)?.unsqueeze(0)?)
+        Ok(rotate(&rows, rot)?.to_dtype(act_dtype())?.unsqueeze(0)?)
     }
 
     /// Prompt -> conditioning [l - drop, 4096] bf16 (the transformer's text stream).
@@ -206,7 +208,7 @@ impl TextEncoder {
             }
         }
         let ang = Tensor::from_vec(ang, (1, 1, l, HEAD_DIM), &self.dev)?;
-        Ok((ang.cos()?.to_dtype(DType::BF16)?, ang.sin()?.to_dtype(DType::BF16)?))
+        Ok((ang.cos()?.to_dtype(act_dtype())?, ang.sin()?.to_dtype(act_dtype())?))
     }
 
     /// RoPE + causal GQA attention: q [1, 32, l, d], k/v [1, 8, l, d] -> [1, l, 4096].
@@ -240,7 +242,7 @@ impl TextEncoder {
         let mut ids = self.tok.encode(p, false).map_err(|e| anyhow::anyhow!("{e}"))?.get_ids().to_vec();
         ids.truncate(max_len);
         let (x, _) = self.run_ids(&ids, &[])?;
-        let norm = self.wt.tensor(&join(self.prefix, "norm.weight"), &self.dev)?.to_dtype(DType::BF16)?;
+        let norm = self.wt.tensor_act(&join(self.prefix, "norm.weight"), &self.dev)?;
         rms(&x, &norm)
     }
 

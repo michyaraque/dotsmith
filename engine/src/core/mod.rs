@@ -11,6 +11,12 @@ pub mod weights;
 
 use std::sync::atomic::{AtomicU8, Ordering};
 
+/// The dtype activations run in: bf16 where this build has candle's bf16 kernels (compute 8.0+), f32 on the build
+/// for older cards (Pascal and Turing have no bf16; their f16 is slow or missing). Weights stay as stored.
+pub fn act_dtype() -> candle_core::DType {
+    if crate::gpu::MIN_COMPUTE >= (8, 0) { candle_core::DType::BF16 } else { candle_core::DType::F32 }
+}
+
 /// Low-VRAM mode (ComfyUI --lowvram style): the text encoder and the DiT never share the GPU, the VAE decodes in
 /// 512 px tiles and attention scores go in ~256 MB chunks. Automatic: DOTSMITH_LOW_VRAM=1, a GPU under 20 GB, or a
 /// memory policy that limits this app to under 20 GB (core::memory).

@@ -6,6 +6,7 @@ use crate::core::util::blend;
 use anyhow::Result;
 use candle_core::{DType, Device, Module, Tensor};
 
+use crate::core::act_dtype;
 use crate::core::weights::Weights;
 
 pub const LATENTS_MEAN: [f32; 16] =
@@ -22,13 +23,13 @@ struct Conv {
 impl Conv {
     /// 5D causal kernels [o, i, kt, kh, kw] -> last temporal slice; 4D kernels as they are.
     fn load(wt: &Weights, p: &str, dev: &Device) -> Result<Self> {
-        let mut w = wt.tensor(&format!("{p}.weight"), dev)?;
+        let mut w = wt.tensor_act(&format!("{p}.weight"), dev)?;
         if w.rank() == 5 {
             let kt = w.dim(2)?;
             w = w.narrow(2, kt - 1, 1)?.squeeze(2)?;
         }
         let pad = w.dim(3)? / 2;
-        Ok(Self { w: w.to_dtype(DType::BF16)?.contiguous()?, b: wt.tensor(&format!("{p}.bias"), dev)?.to_dtype(DType::BF16)?, pad })
+        Ok(Self { w: w.contiguous()?, b: wt.tensor_act(&format!("{p}.bias"), dev)?, pad })
     }
 }
 
@@ -46,14 +47,14 @@ struct Rms {
 
 impl Rms {
     fn load(wt: &Weights, p: &str, dev: &Device) -> Result<Self> {
-        let g = wt.tensor(&format!("{p}.gamma"), dev)?.to_dtype(DType::BF16)?;
+        let g = wt.tensor_act(&format!("{p}.gamma"), dev)?;
         let c = g.dim(0)?;
         Ok(Self { gamma: g.reshape((1, c, 1, 1))?, scale: (c as f64).sqrt() })
     }
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let xf = x.to_dtype(DType::F32)?;
         let n = xf.sqr()?.sum_keepdim(1)?.sqrt()?.maximum(1e-12)?;
-        Ok((xf.broadcast_div(&n)?.to_dtype(DType::BF16)? * self.scale)?.broadcast_mul(&self.gamma)?)
+        Ok((xf.broadcast_div(&n)?.to_dtype(act_dtype())? * self.scale)?.broadcast_mul(&self.gamma)?)
     }
 }
 
@@ -153,8 +154,8 @@ impl VaeQi {
             ups,
             norm_out: Rms::load(&wt, &format!("{d}.norm_out"), dev)?,
             conv_out: Conv::load(&wt, &format!("{d}.conv_out"), dev)?,
-            mean: Tensor::from_slice(&LATENTS_MEAN, (1, 16, 1, 1), dev)?.to_dtype(DType::BF16)?,
-            std: Tensor::from_slice(&LATENTS_STD, (1, 16, 1, 1), dev)?.to_dtype(DType::BF16)?,
+            mean: Tensor::from_slice(&LATENTS_MEAN, (1, 16, 1, 1), dev)?.to_dtype(act_dtype())?,
+            std: Tensor::from_slice(&LATENTS_STD, (1, 16, 1, 1), dev)?.to_dtype(act_dtype())?,
         })
     }
 
@@ -168,7 +169,7 @@ impl VaeQi {
     /// (packs at 1536 px stalled). `cancel` is checked per tile.
     pub fn decode_cancel(&self, z: &Tensor, cancel: Option<&std::sync::atomic::AtomicBool>) -> Result<Tensor> {
         // ai-toolkit decode_latents: cast to the VAE dtype (bf16) first, then latents * std + mean in bf16
-        let z = z.to_dtype(DType::BF16)?.broadcast_mul(&self.std)?.broadcast_add(&self.mean)?;
+        let z = z.to_dtype(act_dtype())?.broadcast_mul(&self.std)?.broadcast_add(&self.mean)?;
         let (_, _, h, w) = z.dims4()?;
         if h * w * 64 <= 512 * 512 {
             return Ok(self.decode_raw(&z)?.to_dtype(DType::F32)?.clamp(-1f32, 1f32)?);
@@ -242,10 +243,7 @@ struct Down {
 
 impl Down {
     fn load(wt: &Weights, p: &str, dev: &Device) -> Result<Self> {
-        Ok(Self {
-            w: wt.tensor(&format!("{p}.weight"), dev)?.to_dtype(DType::BF16)?.contiguous()?,
-            b: wt.tensor(&format!("{p}.bias"), dev)?.to_dtype(DType::BF16)?,
-        })
+        Ok(Self { w: wt.tensor_act(&format!("{p}.weight"), dev)?.contiguous()?, b: wt.tensor_act(&format!("{p}.bias"), dev)? })
     }
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let x = x.pad_with_zeros(3, 0, 1)?.pad_with_zeros(2, 0, 1)?;
@@ -320,7 +318,7 @@ impl VaeEnc {
     }
 
     fn encode_whole(&self, img: &Tensor) -> Result<Tensor> {
-        let mut x = self.conv_in.forward(&img.to_dtype(DType::BF16)?)?;
+        let mut x = self.conv_in.forward(&img.to_dtype(act_dtype())?)?;
         for s in &self.steps {
             x = match s {
                 EncStep::Res(r) => r.forward(&x)?,
