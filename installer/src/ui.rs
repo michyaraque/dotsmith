@@ -252,13 +252,10 @@ impl Setup {
                 .flex_col()
                 .gap(px(14.))
                 .child(heading(tr!(format!("Desinstalar Dotsmith{v}"), format!("Uninstall Dotsmith{v}")), self.dir.display().to_string()))
-                .child(note(
-                    "info",
-                    tr!(
-                        "Se quitan la app y sus accesos directos. Tus imágenes y tus LoRAs no se tocan.",
-                        "The app and its shortcuts go. Your images and your LoRAs stay where they are."
-                    ),
-                ))
+                .child(note(tr!(
+                    "Se quitan la app y sus accesos directos. Tus imágenes y tus LoRAs no se tocan.",
+                    "The app and its shortcuts go. Your images and your LoRAs stay where they are."
+                )))
                 .child(
                     div()
                         .flex()
@@ -318,16 +315,7 @@ impl Setup {
                         format!("Version {v} becomes {VERSION}. Your models, LoRAs, images and settings stay.")
                     )
                 };
-                d.child(note("info", text))
-            })
-            .when(self.previous.is_none(), |d| {
-                d.child(note(
-                    "info",
-                    tr!(
-                        "Los modelos no van aquí: al abrir Dotsmith eliges cuál descargar (de 1 a 18 GB según el modelo).",
-                        "Models are not in here: when Dotsmith opens you pick which one to download (1 to 18 GB depending on the model)."
-                    ),
-                ))
+                d.child(note(text))
             })
             .child(
                 div().flex().flex_col().gap(px(6.)).child(label(tr!("Carpeta", "Folder"))).child(
@@ -688,18 +676,8 @@ fn label(text: &str) -> Div {
     div().text_size(px(11.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(MUTED())).child(text.to_string())
 }
 
-fn note(name: &'static str, text: impl Into<SharedString>) -> Div {
-    div()
-        .flex()
-        .items_start()
-        .gap(px(10.))
-        .p(px(12.))
-        .rounded(px(8.))
-        .bg(rgb(PANEL()))
-        .border_1()
-        .border_color(rgb(BORDER_SOFT()))
-        .child(icon(name).size(px(15.)).mt(px(1.)).text_color(rgb(BLUE())))
-        .child(div().flex_1().min_w_0().text_size(px(12.5)).text_color(rgb(TEXT())).child(text.into()))
+fn note(text: impl Into<SharedString>) -> Div {
+    div().p(px(12.)).rounded(px(8.)).bg(rgb(PANEL())).border_1().border_color(rgb(BORDER_SOFT())).text_size(px(12.5)).child(text.into())
 }
 
 fn toggle(id: &'static str, text: &str, on: bool) -> Stateful<Div> {
@@ -812,7 +790,7 @@ macro_rules! icons {
     };
 }
 
-icons!("check", "circle-check-big", "folder-open", "info", "loader-circle", "minus", "triangle-alert", "x");
+icons!("check", "circle-check-big", "folder-open", "loader-circle", "minus", "triangle-alert", "x");
 
 struct Icons;
 
