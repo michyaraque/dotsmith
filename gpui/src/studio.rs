@@ -2332,7 +2332,11 @@ impl Studio {
     }
 
     fn rail(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        // short windows (a 1080p laptop at 150 %) get tighter items, and the rail scrolls if even those do not fit
+        let item_pad = if self.viewport.1 < 760. { 5. } else { 9. };
         div()
+            .id("rail")
+            .overflow_y_scroll()
             .w(px(74.))
             .flex_none()
             .flex()
@@ -2356,7 +2360,7 @@ impl Studio {
                 let item = div()
                     .kb(("mode", i))
                     .w(px(60.))
-                    .py(px(9.))
+                    .py(px(item_pad))
                     .flex()
                     .flex_col()
                     .items_center()
@@ -3882,6 +3886,7 @@ impl Studio {
                         })
                         .child(
                             div()
+                                .id("detail-facts")
                                 .flex_1()
                                 .min_w_0()
                                 .overflow_hidden()
@@ -3890,6 +3895,7 @@ impl Studio {
                                 .font_family(MONO)
                                 .text_size(px(11.))
                                 .text_color(rgb(MUTED()))
+                                .tooltip(tooltip(&facts.join(" · ")))
                                 .child(facts.join("  ·  ")),
                         ),
                 )
