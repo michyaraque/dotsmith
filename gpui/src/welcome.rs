@@ -75,7 +75,7 @@ impl Studio {
                 if !installed && bytes > 0 {
                     facts.push(crate::download::gb(bytes));
                 }
-                let base = f.variants.first().map(|v| v.0.clone()).unwrap_or_default();
+                let base = self.model.ready_base(&f.id).or_else(|| f.variants.first().map(|v| v.0.clone())).unwrap_or_default();
                 let (id, id2) = (f.id.clone(), f.id.clone());
                 let action: AnyElement = if !fits {
                     div().text_size(px(11.5)).text_color(rgb(MUTED_2())).child(super::ModelState::needs_newer(f)).into_any_element()

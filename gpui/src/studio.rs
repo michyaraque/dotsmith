@@ -371,15 +371,30 @@ impl ModelState {
         self.files.iter().find(|f| f.0 == family).map(|f| f.1.as_slice()).unwrap_or(&[])
     }
 
-    fn family_ready(&self, family: &str) -> bool {
+    /// One variant is on disk: its own diffusion model and the shared files (text encoder, VAE, tokenizer), each in
+    /// at least one precision (the default or an alternative such as bf16).
+    fn variant_ready(&self, family: &str, turbo: bool) -> bool {
         let f = self.files_of(family);
         let covered = |r: &FileRow| r.found || f.iter().any(|o| o.found && o.role == r.role && o.turbo_only == r.turbo_only);
-        !f.is_empty() && f.iter().all(|r| r.turbo_only || r.precision.is_some() || covered(r))
+        let own = |r: &FileRow| r.role == "diffusion model" && r.turbo_only == turbo && r.precision.is_none();
+        let shared = |r: &FileRow| r.role != "diffusion model" && !r.turbo_only && r.precision.is_none();
+        f.iter().any(own) && f.iter().filter(|r| own(r) || shared(r)).all(covered)
+    }
+
+    /// Either variant is on disk (Turbo alone is enough).
+    fn family_ready(&self, family: &str) -> bool {
+        self.variant_ready(family, false) || self.variant_ready(family, true)
+    }
+
+    /// The base the user would get for `family`: the first of its variants that is on disk.
+    fn ready_base(&self, family: &str) -> Option<String> {
+        let f = self.families.iter().find(|f| f.id == family)?;
+        f.variants.iter().find(|v| self.variant_ready(family, v.2)).map(|v| v.0.clone())
     }
 
     fn can_generate(&self) -> bool {
         self.gpu.as_ref().is_some_and(|g| g.ok)
-            && self.family_ready(&self.family)
+            && self.variant_ready(&self.family, self.turbo)
             && self.families.iter().find(|f| f.id == self.family).is_none_or(|f| self.runs_here(f))
     }
 
@@ -930,8 +945,15 @@ impl Studio {
                             .unwrap_or_default(),
                     };
                     self.phase = v["phase"].as_str().unwrap_or("off").into();
+                    // the chosen variant is not on disk but the other one is (only Turbo downloaded): use that one
+                    if !self.model.can_generate()
+                        && let Some(base) = self.model.ready_base(&self.model.family).filter(|b| *b != self.model.base)
+                    {
+                        self.send(json!({"cmd": "select", "base": base, "lora": self.model.lora.clone()}));
+                    }
                     if self.onboarding.is_none() && self.model.gpu.is_some() {
-                        self.onboarding = Some(!self.model.can_generate() || std::env::args().any(|a| a == "--welcome"));
+                        let usable = self.model.can_generate() || self.model.ready_base(&self.model.family).is_some();
+                        self.onboarding = Some(!usable || std::env::args().any(|a| a == "--welcome"));
                     }
                     if self.autogen && self.model.can_generate() {
                         self.autogen = false;
