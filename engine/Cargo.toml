@@ -23,7 +23,7 @@ path = "src/main.rs"
 [dependencies]
 candle-core = { version = "0.11.1", features = ["cuda"] }
 candle-nn = { version = "0.11.1", features = ["cuda"] }
-cudarc = { version = "0.19.10", default-features = false, features = ["std", "cublas", "cublaslt", "driver", "nvrtc", "f16", "cuda-13010", "dynamic-linking"] }
+cudarc = { version = "0.19.10", default-features = false, features = ["std", "cublas", "cublaslt", "driver", "nvrtc", "f16", "dynamic-linking"] }
 half = "2.5"
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }

@@ -1,8 +1,34 @@
 //! CUDA device check, run before any model load so a missing driver or an old card is a message, not a crash.
 use std::sync::OnceLock;
 
-/// Ampere: the bf16 kernels need it.
-pub const MIN_COMPUTE: (i32, i32) = (8, 0);
+const fn parse(s: &str) -> u32 {
+    let (b, mut i, mut n) = (s.as_bytes(), 0, 0);
+    while i < b.len() {
+        n = n * 10 + (b[i] - b'0') as u32;
+        i += 1;
+    }
+    n
+}
+
+/// The oldest card this build runs on: the compute capability its kernels were compiled for (8.0 by default, for the
+/// bf16 kernels; the legacy build for older cards uses less).
+pub const MIN_COMPUTE: (i32, i32) = {
+    let c = parse(env!("DOTSMITH_MIN_COMPUTE"));
+    ((c / 10) as i32, (c % 10) as i32)
+};
+
+/// CUDA major version this build links against (13, or 12 for the legacy build).
+pub const CUDA_MAJOR: u32 = parse(env!("DOTSMITH_CUDA_MAJOR"));
+
+/// The NVIDIA series that starts at `compute`, for messages.
+pub fn series(compute: (i32, i32)) -> &'static str {
+    match compute {
+        (8.., _) => "RTX 30",
+        (7, 5..) => "RTX 20 / GTX 16",
+        (6, _) => "GTX 10",
+        _ => "GTX 900",
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct GpuInfo {
@@ -31,8 +57,13 @@ impl std::fmt::Display for GpuError {
             GpuError::NoDevice(e) => write!(f, "No usable NVIDIA GPU: {e}"),
             GpuError::TooOld(g) => write!(
                 f,
-                "{} (compute {}.{}) is too old: Dotsmith needs an RTX 30 series or newer (compute {}.{}+).",
-                g.name, g.compute.0, g.compute.1, MIN_COMPUTE.0, MIN_COMPUTE.1
+                "{} (compute {}.{}) is too old for this build of Dotsmith, which needs a {} series card or newer (compute {}.{}+).",
+                g.name,
+                g.compute.0,
+                g.compute.1,
+                series(MIN_COMPUTE),
+                MIN_COMPUTE.0,
+                MIN_COMPUTE.1
             ),
         }
     }
@@ -49,9 +80,13 @@ fn loadable(name: &str) -> bool {
     !unsafe { LoadLibraryW(w.as_ptr()) }.is_null()
 }
 
-/// The CUDA 13 DLLs the build links against; the app delay-loads them.
+/// The CUDA DLLs the build links against; the app delay-loads them.
 #[cfg(windows)]
-pub const RUNTIME_DLLS: [&str; 4] = ["cublas64_13.dll", "cublasLt64_13.dll", "curand64_10.dll", "nvrtc64_130_0.dll"];
+pub const RUNTIME_DLLS: [&str; 4] = if CUDA_MAJOR >= 13 {
+    ["cublas64_13.dll", "cublasLt64_13.dll", "curand64_10.dll", "nvrtc64_130_0.dll"]
+} else {
+    ["cublas64_12.dll", "cublasLt64_12.dll", "curand64_10.dll", "nvrtc64_120_0.dll"]
+};
 
 fn panic_text(p: Box<dyn std::any::Any + Send>) -> String {
     p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default()
