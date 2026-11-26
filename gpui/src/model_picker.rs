@@ -5,7 +5,7 @@ use gpui::{AnyElement, Context, FontWeight, ObjectFit, RenderImage, SharedString
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-use super::{Keyboard, Studio, button, button_i, label};
+use super::{Keyboard, Studio, button, button_i, icon_btn, label, tooltip};
 use crate::icons::icon;
 use crate::theme::*;
 use crate::tr;
@@ -802,6 +802,14 @@ impl Studio {
                             .child(div().text_size(px(11.5)).text_color(rgb(MUTED())).child(match &loaded {
                                 Some(l) => format!("{}: {l}", tr!("En GPU", "On GPU")),
                                 None => tr!("GPU libre", "GPU idle").into(),
+                            })),
+                    )
+                    .child(
+                        icon_btn("picker-refresh", "rotate-ccw")
+                            .tooltip(tooltip(tr!("Buscar modelos y LoRAs nuevos en disco", "Look for new models and LoRAs on disk")))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.send(json!({"cmd": "state"}));
+                                cx.notify();
                             })),
                     )
                     .child(button_i("picker-manage", "download", tr!("Descargar modelos", "Get models")).on_click(cx.listener(|this, _, _, cx| {
