@@ -1,0 +1,92 @@
+{
+  "families": {
+    "qwen21": {
+      "label": "Qwen-Image 2.1",
+      "repo": "Qwen/Qwen-Image-2.1",
+      "variants": {
+        "base": {"name": "Base", "label": "Qwen-Image 2.1", "steps": 25},
+        "turbo": {"name": "Turbo", "label": "Qwen-Image 2.1 Turbo", "steps": 8}
+      },
+      "scale": 16,
+      "background": null,
+      "negative_prompt": true,
+      "fixed_guidance": false,
+      "capabilities": [],
+      "lora_modules": ["transformer_blocks.N.img_mlp", "transformer_blocks.N.txt_mlp", "transformer_blocks.N.img_mod", "transformer_blocks.N.txt_mod"],
+      "files": [
+        {"role": "diffusion model", "file": "diffusion_models/qwen_image_2.1_int8_convrot.safetensors", "source": {"repo": "Comfy-Org/Qwen-Image-2.1", "path": "diffusion_models/qwen_image_2.1_int8_convrot.safetensors"}},
+        {"role": "diffusion model", "variant": "turbo", "file": "diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors", "source": {"repo": "Comfy-Org/Qwen-Image-2.1", "path": "diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors"}},
+        {"role": "text encoder", "file": "text_encoders/qwen3vl_8b_int8_convrot.safetensors", "source": {"repo": "Comfy-Org/Qwen-Image-2.1", "path": "text_encoders/qwen3vl_8b_int8_convrot.safetensors"}},
+        {"role": "VAE", "file": "vae/qwen_image_2.1_vae_bf16.safetensors", "source": {"repo": "Comfy-Org/Qwen-Image-2.1", "path": "vae/qwen_image_2.1_vae_bf16.safetensors"}},
+        {"role": "tokenizer", "file": "tokenizers/qwen_image_2.1/tokenizer.json", "also": ["{hf:Qwen-Image-2.1}/processor/tokenizer.json", "{hf:Qwen-Image-2.1}/tokenizer/tokenizer.json", "{hub:Qwen/Qwen-Image-2.1}/processor/tokenizer.json"], "source": {"repo": "Qwen/Qwen-Image-2.1", "path": "processor/tokenizer.json"}}
+      ]
+    },
+    "krea2": {
+      "label": "Krea 2",
+      "repo": "krea/Krea-2-Raw",
+      "variants": {
+        "base": {"name": "Raw", "label": "Krea 2 Raw", "steps": 30},
+        "turbo": {"name": "Turbo", "label": "Krea 2 Turbo", "steps": 8}
+      },
+      "scale": 8,
+      "background": "#FF00FF",
+      "negative_prompt": false,
+      "fixed_guidance": true,
+      "capabilities": ["walk_sheet"],
+      "lora_modules": ["blocks.N.attn.wq", "blocks.N.attn.wk", "blocks.N.attn.wv", "blocks.N.attn.wo", "blocks.N.mlp.gate", "blocks.N.mlp.up", "blocks.N.mlp.down", "txtfusion."],
+      "files": [
+        {"role": "diffusion model", "file": "diffusion_models/krea2_raw_int8_convrot.safetensors", "env": "KREA2_RAW", "source": {"repo": "Comfy-Org/Krea-2", "path": "diffusion_models/krea2_raw_int8_convrot.safetensors"}},
+        {"role": "diffusion model", "variant": "turbo", "file": "diffusion_models/krea2_turbo_int8_convrot.safetensors", "env": "KREA2_TURBO", "source": {"repo": "Comfy-Org/Krea-2", "path": "diffusion_models/krea2_turbo_int8_convrot.safetensors"}},
+        {"role": "diffusion model", "precision": "bf16", "file": "diffusion_models/krea2_raw_bf16.safetensors", "source": {"repo": "krea/Krea-2-Raw", "path": "raw.safetensors"}},
+        {"role": "diffusion model", "variant": "turbo", "precision": "bf16", "file": "diffusion_models/krea2_turbo_bf16.safetensors", "source": {"repo": "krea/Krea-2-Turbo", "path": "turbo.safetensors"}},
+        {"role": "text encoder", "file": "text_encoders/krea2_qwen3vl_4b_int8_convrot.safetensors", "env": "KREA2_TE", "source": {"repo": "Comfy-Org/Krea-2", "path": "text_encoders/qwen3vl_4b_int8_convrot.safetensors"}},
+        {"role": "VAE", "file": "vae/krea2_vae.safetensors", "also": ["{env:KREA2_HF}/vae/diffusion_pytorch_model.safetensors", "{hf:Krea-2-Raw}/vae/diffusion_pytorch_model.safetensors"], "source": {"repo": "krea/Krea-2-Raw", "path": "vae/diffusion_pytorch_model.safetensors"}},
+        {"role": "tokenizer", "file": "tokenizers/krea2/tokenizer.json", "also": ["{env:KREA2_HF}/tokenizer/tokenizer.json", "{hf:Krea-2-Raw}/tokenizer/tokenizer.json"], "source": {"repo": "krea/Krea-2-Raw", "path": "tokenizer/tokenizer.json"}}
+      ]
+    },
+    "lilipixel": {
+      "label": "LiliPixel V1",
+      "repo": "Pinkstack/LiliPixel-V1-190M",
+      "variants": {
+        "base": {"name": "Base", "label": "LiliPixel V1", "steps": 30},
+        "turbo": {"name": "", "label": ""}
+      },
+      "scale": 1,
+      "background": null,
+      "negative_prompt": false,
+      "fixed_guidance": false,
+      "capabilities": [],
+      "prompt": "plain",
+      "sizes": [16, 32, 64],
+      "modes": ["single", "variants", "regions"],
+      "opaque": false,
+      "files": [
+        {"role": "diffusion model", "file": "diffusion_models/lilipixel_v1.safetensors", "source": {"repo": "Pinkstack/LiliPixel-V1-190M", "path": "transformer/diffusion_pytorch_model.safetensors"}},
+        {"role": "text encoder", "file": "text_encoders/voyage_4_nano.safetensors", "source": {"repo": "MongoDB/voyage-4-nano", "path": "model.safetensors"}},
+        {"role": "tokenizer", "file": "tokenizers/voyage_4_nano/tokenizer.json", "source": {"repo": "MongoDB/voyage-4-nano", "path": "tokenizer.json"}}
+      ]
+    },
+    "rdflow": {
+      "label": "RD Flow 64",
+      "repo": "Retro-Diffusion/rd-flow-64",
+      "variants": {
+        "base": {"name": "Base", "label": "RD Flow 64", "steps": 16},
+        "turbo": {"name": "", "label": ""}
+      },
+      "scale": 1,
+      "background": null,
+      "negative_prompt": false,
+      "fixed_guidance": true,
+      "capabilities": [],
+      "prompt": "plain",
+      "sizes": [64],
+      "modes": ["single"],
+      "files": [
+        {"role": "diffusion model", "file": "diffusion_models/rd_flow_64.safetensors", "source": {"repo": "Retro-Diffusion/rd-flow-64", "path": "rd-flow-64.safetensors"}},
+        {"role": "text encoder", "file": "text_encoders/rd_flow_64_qwen3vl_4b_l27.safetensors", "source": {"repo": "Retro-Diffusion/rd-flow-64", "path": "text_encoder/model.safetensors"}},
+        {"role": "tokenizer", "file": "tokenizers/rd_flow_64/tokenizer.json", "source": {"repo": "Retro-Diffusion/rd-flow-64", "path": "text_encoder/tokenizer.json"}}
+      ]
+    }
+  },
+  "store": []
+}
