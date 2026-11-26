@@ -1,6 +1,6 @@
 ; Dotsmith installer (Inno Setup 6). Built by scripts\package.ps1, which passes AppVersion and SourceDir.
 #ifndef AppVersion
-  #define AppVersion "1.0.0"
+  #define AppVersion "1.1.0"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\..\dist\Dotsmith"

@@ -2,6 +2,24 @@
 
 All notable changes to Dotsmith. The format follows [Keep a Changelog](https://keepachangelog.com) and versions follow [SemVer](https://semver.org).
 
+## [1.1.0] - 2026-11-26
+
+Faster, steadier model loading on modest PCs, and fewer dead ends on the way to the first image.
+
+### Added
+- **Hugging Face page** in Settings that walks you through accepting a model's license and creating a token, and tests the token against every gated file before you download.
+- **Cancel a load** from its progress screen or with Esc; the RAM and VRAM it took are freed at once.
+- **New LoRAs and models show up on their own** while the app runs, once a file finishes copying, and the model picker has a refresh button to look again on demand.
+
+### Changed
+- **Loading reads ahead** with large background reads instead of one page at a time, so a cold load runs at the drive's speed: Krea 2 Turbo in Fast mode loads in 7.3 s instead of 21.9 s from an NVMe drive.
+- Krea 2's tokenizer now comes from Qwen3-VL, one file less behind a Hugging Face license.
+
+### Fixed
+- On PCs with 32 GB of RAM, the automatic memory mode no longer locks the model in RAM when that leaves no room to read it, which could stall a Krea 2 load for 15 minutes.
+- Failed downloads and errors open a dialog above every window instead of a line at the bottom left, and a download that needs a license says so and links to the steps.
+- A model with only its Turbo variant downloaded opens and generates instead of sending you back to the start screen.
+
 ## [1.0.0] - 2026-11-26
 
 First public release of Dotsmith: a desktop studio that makes game-ready pixel art on your own NVIDIA GPU, with no account, upload or per-image cost.
