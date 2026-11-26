@@ -2,7 +2,9 @@
 
 All notable changes to Dotsmith. The format follows [Keep a Changelog](https://keepachangelog.com) and versions follow [SemVer](https://semver.org).
 
-## [Unreleased]
+## [1.2.0] - 2026-11-26
+
+Dotsmith installs with its own setup program, in its own look.
 
 ### Added
 - **Dotsmith Setup**, an installer in Dotsmith's own look: installs for your user with no admin prompt, updates in place, replaces the install of 1.0 and 1.1, and takes about a second to copy the files. Its uninstaller sits in Windows' installed apps, keeps your images and LoRAs, and asks before deleting downloaded models or settings.
