@@ -8,7 +8,7 @@ use crate::payload::Payload;
 use crate::system;
 
 /// The files an install put in its folder, one relative path per line (what the uninstall removes).
-const LIST: &str = "uninstall.lst";
+pub const LIST: &str = "uninstall.lst";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Step {

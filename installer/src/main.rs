@@ -34,10 +34,14 @@ fn main() {
         exit(payload::pack(src.as_ref(), out.as_ref()).map_err(|e| format!("{e:#}")));
     }
     let silent = flag("--silent");
+    let me = std::env::current_exe().unwrap_or_default();
+    let payload = payload::Payload::of_this_program().ok().flatten().map(Arc::new);
+    // uninstall.exe opened by hand (no --uninstall): it carries no files and sits next to its install's file list
+    let here = me.parent().filter(|d| payload.is_none() && d.join(tasks::LIST).is_file()).map(PathBuf::from);
 
-    if flag("--uninstall") {
-        let me = std::env::current_exe().unwrap_or_default();
-        let Some(dir) = value("--dir").map(PathBuf::from).or_else(|| system::installed().map(|i| i.dir)).or_else(|| me.parent().map(PathBuf::from)) else {
+    if flag("--uninstall") || here.is_some() {
+        let Some(dir) = value("--dir").map(PathBuf::from).or(here).or_else(|| system::installed().map(|i| i.dir)).or_else(|| me.parent().map(PathBuf::from))
+        else {
             exit(Err("no install found".into()))
         };
         // the uninstaller is one of the files it removes: run from a copy outside the folder
@@ -61,7 +65,6 @@ fn main() {
         return;
     }
 
-    let payload = payload::Payload::of_this_program().ok().flatten().map(Arc::new);
     if silent {
         let Some(p) = payload else { exit(Err("this setup has no files".into())) };
         let dir = value("--dir").map(PathBuf::from).or_else(|| system::installed().map(|i| i.dir)).unwrap_or_else(system::default_dir);
