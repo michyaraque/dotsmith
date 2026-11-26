@@ -1,0 +1,37 @@
+[package]
+name = "dotsmith-engine"
+version = "0.1.0"
+description = "Diffusion inference for Dotsmith in Rust (candle + CUDA): Qwen-Image 2.1, Krea 2, LiliPixel, RD Flow; int8 W8A8, LoRA, layer streaming"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+name = "dotsmith_engine"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dotsmith-engine"
+path = "src/main.rs"
+
+[dependencies]
+candle-core = { version = "0.11.1", features = ["cuda"] }
+candle-nn = { version = "0.11.1", features = ["cuda"] }
+cudarc = { version = "0.19.10", default-features = false, features = ["std", "cublas", "cublaslt", "driver", "nvrtc", "f16", "cuda-13010", "dynamic-linking"] }
+half = "2.5"
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+memmap2 = "0.9"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61.3", features = ["Win32_Graphics_Dxgi", "Win32_Foundation"] }
+
