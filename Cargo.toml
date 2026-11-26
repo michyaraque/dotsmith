@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["engine"]
+members = ["engine", "gpui"]
 
 [workspace.package]
 authors = ["Michael Araque"]
