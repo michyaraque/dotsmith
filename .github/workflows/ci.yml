@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: &docs
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.github/screenshots/**'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/PULL_REQUEST_TEMPLATE.md'
+      - '.github/dependabot.yml'
+  pull_request:
+    paths-ignore: *docs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: short
+
+jobs:
+  format:
+    name: Format
+    # Linux minutes cost half of Windows ones and formatting needs no toolchain beyond rustfmt
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - run: cargo fmt --all --check
+
+  build:
+    name: Lint, test and build
+    needs: format
+    runs-on: windows-2022
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-toolchain
+        with:
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --release --locked -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace --release --locked
+
+      - name: Build the app
+        run: cargo build --package dotsmith --release --locked

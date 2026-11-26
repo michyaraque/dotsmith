@@ -1,0 +1,49 @@
+name: Set up the Dotsmith toolchain
+description: Rust (from rust-toolchain.toml), the CUDA 13.1 parts Dotsmith builds and ships with (cached), and the MSVC / Windows SDK tool paths.
+
+inputs:
+  save-cache:
+    description: Save the Rust build cache at the end of the job (only main should, so branches do not evict it)
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Install Rust
+      shell: pwsh
+      run: rustup toolchain install
+
+    - uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: windows-release
+        save-if: ${{ inputs.save-cache }}
+
+    - name: Restore CUDA 13.1
+      id: cuda-cache
+      uses: actions/cache@v4
+      with:
+        path: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1
+        key: cuda-13.1.1-nvcc-cudart-cublas-curand-nvrtc-crt-nvvm-thrust-v1
+
+    - name: Install CUDA 13.1
+      if: steps.cuda-cache.outputs.cache-hit != 'true'
+      shell: pwsh
+      run: |
+        $installer = "$env:RUNNER_TEMP\cuda.exe"
+        Invoke-WebRequest "https://developer.download.nvidia.com/compute/cuda/13.1.1/network_installers/cuda_13.1.1_windows_network.exe" -OutFile $installer
+        $parts = 'nvcc', 'cudart', 'cublas', 'cublas_dev', 'curand', 'curand_dev', 'nvrtc', 'nvrtc_dev', 'crt', 'nvvm', 'thrust' | ForEach-Object { "${_}_13.1" }
+        Start-Process $installer -ArgumentList (@('-s') + $parts) -Wait
+
+    - name: Point the build at CUDA, MSVC and the Windows SDK
+      shell: pwsh
+      run: |
+        $cuda = 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1'
+        if (-not (Test-Path "$cuda\bin\nvcc.exe")) { throw 'CUDA 13.1 is missing' }
+        "CUDA_PATH=$cuda" >> $env:GITHUB_ENV
+        "$cuda\bin" >> $env:GITHUB_PATH
+        "$cuda\bin\x64" >> $env:GITHUB_PATH
+        $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+        $msvc = Get-ChildItem "$vs\VC\Tools\MSVC" | Sort-Object Name -Descending | Select-Object -First 1
+        $fxc = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\fxc.exe" | Sort-Object FullName -Descending | Select-Object -First 1
+        "NVCC_CCBIN=$($msvc.FullName)\bin\Hostx64\x64\cl.exe" >> $env:GITHUB_ENV
+        "GPUI_FXC_PATH=$($fxc.FullName)" >> $env:GITHUB_ENV
