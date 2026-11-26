@@ -84,6 +84,27 @@ pub struct Engine {
     prompts: HashMap<String, Tensor>,
 }
 
+/// The GPU works, and both the card and this build's kernels are new enough for the family (its catalog
+/// `min_compute`): the legacy build for older cards has no bf16 kernels, whatever the card.
+fn runs_here(kind: ModelKind) -> Result<()> {
+    let gpu = crate::gpu::probe()?;
+    let Some([major, minor]) = kind.family.spec().min_compute else { return Ok(()) };
+    if crate::gpu::MIN_COMPUTE < (major, minor) {
+        anyhow::bail!("{} needs Dotsmith's standard package; this one is for older cards.", kind.family.label());
+    }
+    if gpu.compute < (major, minor) {
+        anyhow::bail!(
+            "{} needs a {} series card or newer (compute {major}.{minor}+); {} is compute {}.{}.",
+            kind.family.label(),
+            crate::gpu::series((major, minor)),
+            gpu.name,
+            gpu.compute.0,
+            gpu.compute.1
+        );
+    }
+    Ok(())
+}
+
 impl Engine {
     /// Load `kind` from the default file layout of its family.
     pub fn load(kind: ModelKind) -> Result<Self> {
@@ -91,7 +112,7 @@ impl Engine {
     }
 
     pub fn load_with(kind: ModelKind, paths: ModelPaths) -> Result<Self> {
-        crate::gpu::probe()?;
+        runs_here(kind)?;
         paths.require(kind.variant)?;
         let dev = Device::new_cuda(0)?;
         let model = load_model(kind, paths, &dev)?;
@@ -129,6 +150,7 @@ impl Engine {
         if kind == cur {
             return Ok(());
         }
+        runs_here(kind)?;
         let paths = ModelPaths::default_for(kind.family)?;
         paths.require(kind.variant)?;
         if kind.family == cur.family {

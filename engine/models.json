@@ -2,6 +2,7 @@
   "families": {
     "qwen21": {
       "label": "Qwen-Image 2.1",
+      "min_compute": [8, 0],
       "repo": "Qwen/Qwen-Image-2.1",
       "variants": {
         "base": {"name": "Base", "label": "Qwen-Image 2.1", "steps": 25},
@@ -23,6 +24,7 @@
     },
     "krea2": {
       "label": "Krea 2",
+      "min_compute": [8, 0],
       "repo": "krea/Krea-2-Raw",
       "variants": {
         "base": {"name": "Raw", "label": "Krea 2 Raw", "steps": 30},
@@ -68,6 +70,7 @@
     },
     "rdflow": {
       "label": "RD Flow 64",
+      "min_compute": [8, 0],
       "repo": "Retro-Diffusion/rd-flow-64",
       "variants": {
         "base": {"name": "Base", "label": "RD Flow 64", "steps": 16},

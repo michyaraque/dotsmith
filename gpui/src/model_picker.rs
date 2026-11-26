@@ -28,6 +28,8 @@ pub struct FamilyInfo {
     pub plain: bool,
     /// can paint an opaque background on request
     pub opaque: bool,
+    /// oldest GPU it runs on (compute capability); None = any card this build supports
+    pub min_compute: Option<(i32, i32)>,
     /// default steps of the base and the Turbo variant
     pub steps: [u32; 2],
     /// (base-model label sent back to the backend, short name shown, is turbo)
@@ -50,6 +52,7 @@ impl FamilyInfo {
                         modes: f["modes"].as_array().map(|t| t.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
                         plain: f["plain"].as_bool().unwrap_or(false),
                         opaque: f["opaque"].as_bool().unwrap_or(true),
+                        min_compute: f["min_compute"].as_array().and_then(|c| Some((c.first()?.as_i64()? as i32, c.get(1)?.as_i64()? as i32))),
                         steps: [false, true].map(|t| {
                             f["variants"]
                                 .as_array()
@@ -319,6 +322,7 @@ impl Studio {
         // ---------------------------------------------------------------- left: base models
         let cards = families.into_iter().enumerate().map(|(i, f)| {
             let sel = f.id == pk.family;
+            let fits = self.model.runs_here(&f);
             let is_loaded = loaded.as_ref().is_some_and(|l| f.variants.iter().any(|v| &v.0 == l));
             let f2 = f.clone();
             let variants = f.variants.clone();
@@ -333,10 +337,13 @@ impl Studio {
                 .gap(px(10.))
                 .when(sel, |d| d.bg(rgb(RAISED())).border_color(rgb(ACCENT_DIM())))
                 .when(!sel, |d| d.bg(rgb(PANEL())).border_color(rgb(BORDER_SOFT())).hover(|s| s.bg(rgb(RAISED())).border_color(rgb(BORDER()))))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.pick_family(&f2);
-                    cx.notify();
-                }))
+                .when(!fits, |d| d.opacity(0.45).cursor_default())
+                .when(fits, |d| {
+                    d.on_click(cx.listener(move |this, _, _, cx| {
+                        this.pick_family(&f2);
+                        cx.notify();
+                    }))
+                })
                 .child(
                     div()
                         .flex()
@@ -356,7 +363,11 @@ impl Studio {
                                 .flex_col()
                                 .gap(px(2.))
                                 .child(div().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(TEXT())).child(f.label.clone()))
-                                .child(div().text_size(px(11.5)).text_color(rgb(MUTED_2())).child(self.publisher(&f))),
+                                .child(div().text_size(px(11.5)).text_color(rgb(MUTED_2())).child(if fits {
+                                    self.publisher(&f)
+                                } else {
+                                    super::ModelState::needs_newer(&f)
+                                })),
                         )
                         .when(is_loaded, |d| {
                             d.child(

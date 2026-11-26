@@ -90,6 +90,8 @@ pub struct FamilySpec {
     /// Whether "Opaque background" means something for it (a painted background on request).
     #[serde(default = "yes")]
     pub opaque: bool,
+    /// Oldest GPU it runs on, as a compute capability (`[8, 0]` for bf16 models); None = any card the build supports.
+    pub min_compute: Option<[i32; 2]>,
     pub files: Vec<FileSpec>,
 }
 

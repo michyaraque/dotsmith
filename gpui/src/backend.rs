@@ -159,7 +159,7 @@ impl Worker {
                     variants.push(json!({"label": ModelKind::new(*f, Variant::Turbo).label(), "name": s.variants.turbo.name, "turbo": true, "steps": s.variants.turbo.steps}));
                 }
                 json!({"id": f.id(), "label": s.label, "repo": s.repo, "scale": s.scale, "alpha": s.background.is_none(), "capabilities": s.capabilities,
-                       "sizes": s.sizes, "modes": s.modes, "plain": s.prompt == "plain", "opaque": s.opaque, "variants": variants})
+                       "sizes": s.sizes, "modes": s.modes, "plain": s.prompt == "plain", "opaque": s.opaque, "min_compute": s.min_compute, "variants": variants})
             }).collect::<Vec<_>>(),
             "catalog_error": dotsmith_engine::manifest::user_error(),
             "store": dotsmith_engine::manifest::store().into_iter().map(|s| json!({"repo": s.repo, "label": s.label})).collect::<Vec<_>>(),

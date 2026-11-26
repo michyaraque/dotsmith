@@ -60,6 +60,7 @@ impl Studio {
             .enumerate()
             .map(|(i, f)| {
                 let installed = self.model.family_ready(&f.id);
+                let fits = self.model.runs_here(f);
                 let rows: Vec<FileRow> = self.model.files_of(&f.id).iter().filter(|r| !r.found && !r.turbo_only && r.precision.is_none()).cloned().collect();
                 let bytes: u64 = rows.iter().filter_map(|r| r.remote.as_ref().and_then(|x| self.remote_size(x))).sum();
                 let can_download = !rows.is_empty() && rows.iter().all(|r| r.remote.is_some());
@@ -76,7 +77,9 @@ impl Studio {
                 }
                 let base = f.variants.first().map(|v| v.0.clone()).unwrap_or_default();
                 let (id, id2) = (f.id.clone(), f.id.clone());
-                let action: AnyElement = if installed && f.id == current {
+                let action: AnyElement = if !fits {
+                    div().text_size(px(11.5)).text_color(rgb(MUTED_2())).child(super::ModelState::needs_newer(f)).into_any_element()
+                } else if installed && f.id == current {
                     div()
                         .flex()
                         .items_center()

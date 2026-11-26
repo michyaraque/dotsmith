@@ -291,6 +291,7 @@ struct GpuState {
     ok: bool,
     name: String,
     vram_mb: u64,
+    compute: (i32, i32),
     error: String,
     low_vram: bool,
     memory: Vec<dotsmith_engine::core::memory::Placed>,
@@ -351,7 +352,21 @@ impl ModelState {
     }
 
     fn can_generate(&self) -> bool {
-        self.gpu.as_ref().is_some_and(|g| g.ok) && self.family_ready(&self.family)
+        self.gpu.as_ref().is_some_and(|g| g.ok)
+            && self.family_ready(&self.family)
+            && self.families.iter().find(|f| f.id == self.family).is_none_or(|f| self.runs_here(f))
+    }
+
+    /// "Needs RTX 30 or newer" for a family this card is too old for.
+    fn needs_newer(f: &FamilyInfo) -> String {
+        let series = f.min_compute.map(dotsmith_engine::gpu::series).unwrap_or_default();
+        tr!(format!("Necesita {series} o superior"), format!("Needs {series} or newer"))
+    }
+
+    /// Both the graphics card and this build's kernels are new enough for the family (its catalog `min_compute`).
+    fn runs_here(&self, f: &FamilyInfo) -> bool {
+        let Some(need) = f.min_compute else { return true };
+        dotsmith_engine::gpu::MIN_COMPUTE >= need && self.gpu.as_ref().is_none_or(|g| !g.ok || g.compute >= need)
     }
 }
 
@@ -814,6 +829,11 @@ impl Studio {
                             ok: v["gpu"]["ok"].as_bool().unwrap_or(false),
                             name: v["gpu"]["name"].as_str().unwrap_or("").into(),
                             vram_mb: v["gpu"]["vram_mb"].as_u64().unwrap_or(0),
+                            compute: v["gpu"]["compute"]
+                                .as_str()
+                                .and_then(|c| c.split_once('.'))
+                                .and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?)))
+                                .unwrap_or((0, 0)),
                             error: v["gpu"]["error"].as_str().unwrap_or("").into(),
                             low_vram: v["gpu"]["low_vram"].as_bool().unwrap_or(false),
                             memory: serde_json::from_value(v["gpu"]["memory"].clone()).unwrap_or_default(),
