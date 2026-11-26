@@ -252,10 +252,7 @@ impl Setup {
                 .flex_col()
                 .gap(px(14.))
                 .child(heading(tr!(format!("Desinstalar Dotsmith{v}"), format!("Uninstall Dotsmith{v}")), self.dir.display().to_string()))
-                .child(note(tr!(
-                    "Se quitan la app y sus accesos directos. Tus imágenes y tus LoRAs no se tocan.",
-                    "The app and its shortcuts go. Your images and your LoRAs stay where they are."
-                )))
+                .child(note(tr!("Se quitará Dotsmith de este equipo.", "Dotsmith will be removed from this computer.")))
                 .child(
                     div()
                         .flex()
@@ -266,8 +263,8 @@ impl Setup {
                                 toggle(
                                     "models",
                                     &tr!(
-                                        format!("Borrar también los modelos descargados ({})", bytes(self.models_size)),
-                                        format!("Also delete the downloaded models ({})", bytes(self.models_size))
+                                        format!("Eliminar también los modelos descargados ({})", bytes(self.models_size)),
+                                        format!("Also remove the downloaded models ({})", bytes(self.models_size))
                                     ),
                                     self.models,
                                 )
@@ -277,14 +274,12 @@ impl Setup {
                                 })),
                             )
                         })
-                        .child(
-                            toggle("settings", tr!("Borrar también los ajustes y los registros", "Also delete the settings and logs"), self.settings).on_click(
-                                cx.listener(|s, _, _, cx| {
-                                    s.settings = !s.settings;
-                                    cx.notify();
-                                }),
-                            ),
-                        ),
+                        .child(toggle("settings", tr!("Eliminar también la configuración", "Also remove the settings"), self.settings).on_click(cx.listener(
+                            |s, _, _, cx| {
+                                s.settings = !s.settings;
+                                cx.notify();
+                            },
+                        ))),
                 );
         }
         let raw = match &self.mode {
@@ -297,7 +292,7 @@ impl Setup {
             Action::Update => tr!("Actualizar Dotsmith", "Update Dotsmith"),
             Action::Reinstall => tr!("Reinstalar Dotsmith", "Reinstall Dotsmith"),
         };
-        let what = tr!("Pixel art para tus juegos, hecho en tu propia gráfica.", "Pixel art for your games, made on your own graphics card.");
+        let what = tr!(format!("Versión {VERSION}"), format!("Version {VERSION}"));
         div()
             .flex()
             .flex_col()
@@ -305,20 +300,14 @@ impl Setup {
             .child(heading(title, what))
             .when_some(self.previous.clone(), |d, v| {
                 let text = if self.action() == Action::Reinstall {
-                    tr!(
-                        format!("Dotsmith {v} ya está instalado: se vuelven a copiar sus archivos. Tus modelos, LoRAs, imágenes y ajustes se quedan."),
-                        format!("Dotsmith {v} is already installed: its files are copied again. Your models, LoRAs, images and settings stay.")
-                    )
+                    tr!(format!("Dotsmith {v} ya está instalado en este equipo."), format!("Dotsmith {v} is already installed on this computer."))
                 } else {
-                    tr!(
-                        format!("Se actualizará la versión {v} a la {VERSION}. Tus modelos, LoRAs, imágenes y ajustes se quedan."),
-                        format!("Version {v} becomes {VERSION}. Your models, LoRAs, images and settings stay.")
-                    )
+                    tr!(format!("Se actualizará Dotsmith {v} a la versión {VERSION}."), format!("Dotsmith {v} will be updated to version {VERSION}."))
                 };
                 d.child(note(text))
             })
             .child(
-                div().flex().flex_col().gap(px(6.)).child(label(tr!("Carpeta", "Folder"))).child(
+                div().flex().flex_col().gap(px(6.)).child(label(tr!("Carpeta de destino", "Destination folder"))).child(
                     div()
                         .flex()
                         .gap(px(8.))
@@ -345,10 +334,12 @@ impl Setup {
                         }),
                 ),
             )
-            .child(toggle("desktop", tr!("Acceso directo en el escritorio", "Desktop shortcut"), self.desktop).on_click(cx.listener(|s, _, _, cx| {
-                s.desktop = !s.desktop;
-                cx.notify();
-            })))
+            .child(toggle("desktop", tr!("Crear un acceso directo en el escritorio", "Create a desktop shortcut"), self.desktop).on_click(cx.listener(
+                |s, _, _, cx| {
+                    s.desktop = !s.desktop;
+                    cx.notify();
+                },
+            )))
             .child(
                 div()
                     .flex()
@@ -357,37 +348,37 @@ impl Setup {
                     .text_size(px(11.5))
                     .text_color(rgb(MUTED_2()))
                     .child(tr!(
-                        format!("Ocupa {}. Solo para tu usuario, sin permisos de administrador. Al instalar aceptas la", bytes(raw)),
-                        format!("Takes {}. For your user only, no admin rights. Installing means you accept the", bytes(raw))
+                        format!("Espacio necesario: {}. Al instalar aceptas la", bytes(raw)),
+                        format!("Space required: {}. By installing you accept the", bytes(raw))
                     ))
-                    .child(div().id("license").text_color(rgb(TEXT())).underline().cursor_pointer().child(tr!("licencia MIT.", "MIT license.")).on_click(
-                        cx.listener(|s, _, _, cx| {
+                    .child(div().id("license").text_color(rgb(TEXT())).underline().cursor_pointer().child(tr!("licencia.", "license.")).on_click(cx.listener(
+                        |s, _, _, cx| {
                             s.screen = Screen::License;
                             cx.notify();
-                        }),
-                    )),
+                        },
+                    ))),
             )
     }
 
     fn working(&self) -> Div {
         let p = self.progress.lock().unwrap();
         let v = self.previous.clone().unwrap_or_default();
-        let old = tr!(format!("Quitar la versión {v} (puede pedir permiso)"), format!("Remove version {v} (may ask for permission)"));
+        let old = tr!(format!("Quitar la versión {v}"), format!("Remove version {v}"));
         let steps: Vec<(Step, &str)> = if self.installing() {
             [
                 self.legacy.then_some((Step::Previous, old.as_str())),
-                Some((Step::Files, tr!("Copiar los archivos", "Copy the files"))),
-                Some((Step::Shortcuts, tr!("Crear los accesos directos", "Create the shortcuts"))),
-                Some((Step::Register, tr!("Añadir a las apps de Windows", "Add to Windows' apps"))),
+                Some((Step::Files, tr!("Copiar archivos", "Copy files"))),
+                Some((Step::Shortcuts, tr!("Crear accesos directos", "Create shortcuts"))),
+                Some((Step::Register, tr!("Registrar la aplicación", "Register the application"))),
             ]
             .into_iter()
             .flatten()
             .collect()
         } else {
             vec![
-                (Step::Files, tr!("Quitar los archivos", "Remove the files")),
-                (Step::Shortcuts, tr!("Quitar los accesos directos", "Remove the shortcuts")),
-                (Step::Register, tr!("Quitar de las apps de Windows", "Remove from Windows' apps")),
+                (Step::Files, tr!("Quitar archivos", "Remove files")),
+                (Step::Shortcuts, tr!("Quitar accesos directos", "Remove shortcuts")),
+                (Step::Register, tr!("Quitar el registro de la aplicación", "Unregister the application")),
             ]
         };
         let current = steps.iter().position(|s| Some(s.0) == p.step).unwrap_or(0);
@@ -403,7 +394,7 @@ impl Setup {
                 } else {
                     tr!("Desinstalando Dotsmith…", "Uninstalling Dotsmith…")
                 },
-                tr!("Un momento, no cierres esta ventana.", "One moment, keep this window open."),
+                tr!("Espera mientras se completa el proceso.", "Please wait while the process completes."),
             ))
             .child(div().flex().flex_col().gap(px(10.)).children(steps.iter().enumerate().map(|(i, (_, text))| {
                 let (mark, color) = match i.cmp(&current) {
@@ -442,27 +433,17 @@ impl Setup {
 
     fn done(&self, cx: &mut Context<Self>) -> Div {
         let (title, text) = if self.installing() {
-            let where_ = if self.desktop {
-                tr!("en el menú Inicio y en el escritorio", "in the Start menu and on the desktop")
-            } else {
-                tr!("en el menú Inicio", "in the Start menu")
-            };
-            (tr!("Dotsmith está listo", "Dotsmith is ready"), tr!(format!("Lo tienes {where_}."), format!("You'll find it {where_}.")))
+            (tr!("Instalación completada", "Installation complete"), tr!("Dotsmith se ha instalado correctamente.", "Dotsmith was installed successfully."))
         } else {
-            (
-                tr!("Dotsmith se ha desinstalado", "Dotsmith is uninstalled"),
-                tr!("Tus imágenes y tus LoRAs siguen en su sitio.", "Your images and your LoRAs are still where they were.").into(),
-            )
+            (tr!("Desinstalación completada", "Uninstall complete"), tr!("Dotsmith se ha quitado de este equipo.", "Dotsmith was removed from this computer."))
         };
         div().flex().flex_col().gap(px(14.)).child(icon("circle-check-big").size(px(34.)).text_color(rgb(GREEN()))).child(heading(title, text)).when(
             self.installing(),
             |d| {
-                d.child(toggle("launch", tr!("Abrir Dotsmith al terminar", "Open Dotsmith when I close this"), self.launch).on_click(cx.listener(
-                    |s, _, _, cx| {
-                        s.launch = !s.launch;
-                        cx.notify();
-                    },
-                )))
+                d.child(toggle("launch", tr!("Ejecutar Dotsmith", "Run Dotsmith"), self.launch).on_click(cx.listener(|s, _, _, cx| {
+                    s.launch = !s.launch;
+                    cx.notify();
+                })))
             },
         )
     }
