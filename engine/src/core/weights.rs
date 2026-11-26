@@ -168,6 +168,18 @@ impl Weights {
         Ok(Tensor::from_raw_buffer(b, dt, &e.shape, dev)?)
     }
 
+    /// A float tensor as f32, widened on the CPU while it is read: cards before Ampere have no bf16 kernels to do it.
+    pub fn tensor_f32(&self, name: &str, dev: &Device) -> Result<Tensor> {
+        let (b, e) = self.bytes(name)?;
+        let v: Vec<f32> = match e.dtype.as_str() {
+            "F32" => return self.tensor(name, dev),
+            "BF16" => b.as_chunks::<2>().0.iter().map(|c| half::bf16::from_le_bytes(*c).to_f32()).collect(),
+            "F16" => b.as_chunks::<2>().0.iter().map(|c| half::f16::from_le_bytes(*c).to_f32()).collect(),
+            other => bail!("{name}: dtype {other} is not a float"),
+        };
+        Ok(Tensor::from_vec(v, e.shape.as_slice(), dev)?)
+    }
+
     /// Bytes reinterpreted as `as_dtype` (int8 weights go in as u8 and the kernels read them signed).
     pub fn raw(&self, name: &str, as_dtype: DType, dev: &Device) -> Result<Tensor> {
         let (b, e) = self.bytes(name)?;

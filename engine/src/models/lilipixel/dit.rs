@@ -53,7 +53,7 @@ impl Dit {
         let wt = Weights::open(path)?;
         let f = |n: &str| -> Result<Tensor> {
             let name = if wt.has(&format!("inner.{n}")) { format!("inner.{n}") } else { n.to_string() };
-            Ok(wt.tensor(&name, dev)?.to_dtype(DType::F32)?)
+            wt.tensor_f32(&name, dev)
         };
         let n_blocks = (0..).take_while(|i| wt.has(&format!("inner.blocks.{i}.qkv.weight")) || wt.has(&format!("blocks.{i}.qkv.weight"))).count();
         let blocks = (0..n_blocks)

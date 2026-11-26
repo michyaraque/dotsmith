@@ -1,6 +1,6 @@
 //! MongoDB/voyage-4-nano, LiliPixel's text encoder: a 12-layer Qwen3 (1024 wide, 16 query / 8 KV heads x 128, RoPE
 //! theta 1e6) with bidirectional attention over the real tokens, its final norm, then a 1024 -> 2048 linear. f32; the
-//! embedding table stays bf16 and rows are widened as they are read.
+//! embedding table stays bf16 in RAM and only a prompt's rows are widened and uploaded.
 use anyhow::{Context, Result};
 use candle_core::{D, DType, Device, Tensor};
 use tokenizers::Tokenizer;
@@ -55,7 +55,7 @@ pub(super) fn linear(x: &Tensor, w: &Tensor) -> Result<Tensor> {
 impl Voyage {
     pub fn load(weights: &str, tokenizer_json: &str, dev: &Device) -> Result<Self> {
         let wt = Weights::open(weights)?;
-        let f = |n: &str| -> Result<Tensor> { Ok(wt.tensor(n, dev)?.to_dtype(DType::F32)?) };
+        let f = |n: &str| wt.tensor_f32(n, dev);
         let n_layers = (0..).take_while(|i| wt.has(&format!("model.layers.{i}.input_layernorm.weight"))).count();
         let layers = (0..n_layers)
             .map(|i| {
@@ -77,7 +77,7 @@ impl Voyage {
             .collect::<Result<Vec<_>>>()?;
         let tok = Tokenizer::from_file(tokenizer_json).map_err(anyhow::Error::msg).context("voyage tokenizer")?;
         Ok(Self {
-            embed: wt.tensor("model.embed_tokens.weight", dev)?,
+            embed: wt.tensor("model.embed_tokens.weight", &Device::Cpu)?,
             layers,
             norm: f("model.norm.weight")?,
             linear: f("linear.weight")?,
@@ -99,8 +99,8 @@ impl Voyage {
     /// Prompt -> (features [len, 2048] f32, real-token mask [len] f32).
     pub fn encode(&self, prompt: &str, len: usize) -> Result<(Tensor, Tensor)> {
         let (ids, n) = self.tokens(prompt, len)?;
-        let idx = Tensor::new(ids.as_slice(), &self.dev)?;
-        let mut x = self.embed.index_select(&idx, 0)?.to_dtype(DType::F32)?;
+        let idx = Tensor::new(ids.as_slice(), &Device::Cpu)?;
+        let mut x = self.embed.index_select(&idx, 0)?.to_dtype(DType::F32)?.to_device(&self.dev)?;
         let (cos, sin) = rope(len, &self.dev)?;
         // keys past the real tokens are masked for every query
         let bias: Vec<f32> = (0..len).map(|j| if j < n { 0.0 } else { f32::NEG_INFINITY }).collect();
