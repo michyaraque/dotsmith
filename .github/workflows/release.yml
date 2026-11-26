@@ -21,7 +21,7 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check the tag matches the app version
         shell: pwsh
@@ -51,7 +51,7 @@ jobs:
           ($notes -replace '^\[[^\]]+\][^\r\n]*\r?\n', '').Trim() | Set-Content dist/NOTES.md
 
       - name: Draft the GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           draft: true
           body_path: dist/NOTES.md
