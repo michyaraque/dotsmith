@@ -42,7 +42,7 @@
         {"role": "diffusion model", "variant": "turbo", "precision": "bf16", "file": "diffusion_models/krea2_turbo_bf16.safetensors", "source": {"repo": "krea/Krea-2-Turbo", "path": "turbo.safetensors"}},
         {"role": "text encoder", "file": "text_encoders/krea2_qwen3vl_4b_int8_convrot.safetensors", "env": "KREA2_TE", "source": {"repo": "Comfy-Org/Krea-2", "path": "text_encoders/qwen3vl_4b_int8_convrot.safetensors"}},
         {"role": "VAE", "file": "vae/krea2_vae.safetensors", "also": ["{env:KREA2_HF}/vae/diffusion_pytorch_model.safetensors", "{hf:Krea-2-Raw}/vae/diffusion_pytorch_model.safetensors"], "source": {"repo": "krea/Krea-2-Raw", "path": "vae/diffusion_pytorch_model.safetensors"}},
-        {"role": "tokenizer", "file": "tokenizers/krea2/tokenizer.json", "also": ["{env:KREA2_HF}/tokenizer/tokenizer.json", "{hf:Krea-2-Raw}/tokenizer/tokenizer.json"], "source": {"repo": "krea/Krea-2-Raw", "path": "tokenizer/tokenizer.json"}}
+        {"role": "tokenizer", "file": "tokenizers/krea2/tokenizer.json", "also": ["{env:KREA2_HF}/tokenizer/tokenizer.json", "{hf:Krea-2-Raw}/tokenizer/tokenizer.json"], "source": {"repo": "Qwen/Qwen3-VL-4B-Instruct", "path": "tokenizer.json"}}
       ]
     },
     "lilipixel": {
