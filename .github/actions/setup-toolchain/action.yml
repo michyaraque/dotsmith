@@ -1,9 +1,12 @@
 name: Set up the Dotsmith toolchain
-description: Rust (from rust-toolchain.toml), the CUDA 13.1 parts Dotsmith builds and ships with (cached), and the MSVC / Windows SDK tool paths.
+description: Rust (from rust-toolchain.toml) with sccache and a per-job target cache, CUDA 13.1, and the MSVC / Windows SDK tool paths.
 
 inputs:
+  cache-key:
+    description: Name of this job's target cache (jobs that compile differently keep separate caches)
+    required: true
   save-cache:
-    description: Save the Rust build cache at the end of the job (only master should, so other branches do not evict it)
+    description: Save the target cache at the end of the job (only master should, so other branches do not evict it)
     default: "false"
 
 runs:
@@ -13,9 +16,18 @@ runs:
       shell: pwsh
       run: rustup toolchain install
 
+    # every rustc call is cached on its own, so a changed lockfile or another workflow reuses whatever matches
+    - uses: mozilla-actions/sccache-action@v0.0.9
+
+    - name: Route rustc through sccache
+      shell: pwsh
+      run: |
+        "RUSTC_WRAPPER=sccache" >> $env:GITHUB_ENV
+        "SCCACHE_GHA_ENABLED=true" >> $env:GITHUB_ENV
+
     - uses: Swatinem/rust-cache@v2
       with:
-        shared-key: windows-release
+        shared-key: ${{ inputs.cache-key }}
         save-if: ${{ inputs.save-cache }}
 
     - name: Restore CUDA 13.1

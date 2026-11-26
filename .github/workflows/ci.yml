@@ -38,23 +38,30 @@ jobs:
       - run: rustup toolchain install
       - run: cargo fmt --all --check
 
-  build:
-    name: Lint, test and build
+  # clippy and the tests compile differently (check vs release), so they run side by side, each with its own cache
+  lint:
+    name: Clippy
+    needs: format
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-toolchain
+        with:
+          cache-key: clippy
+          save-cache: ${{ github.ref == 'refs/heads/master' }}
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  test:
+    name: Tests
     needs: format
     runs-on: windows-2022
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
-
+      # release, like the packaged app: the dependencies it compiles are the ones the release workflow finds in sccache
       - uses: ./.github/actions/setup-toolchain
         with:
+          cache-key: release
           save-cache: ${{ github.ref == 'refs/heads/master' }}
-
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets --release --locked -- -D warnings
-
-      - name: Tests
-        run: cargo test --workspace --release --locked
-
-      - name: Build the app
-        run: cargo build --package dotsmith --release --locked
+      - run: cargo test --workspace --release --locked

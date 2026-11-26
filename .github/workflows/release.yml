@@ -30,6 +30,8 @@ jobs:
           if ("v$version" -ne "${{ github.ref_name }}") { throw "tag ${{ github.ref_name }} != gpui/Cargo.toml version $version" }
 
       - uses: ./.github/actions/setup-toolchain
+        with:
+          cache-key: release
 
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
