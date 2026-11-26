@@ -14,7 +14,7 @@ Versions follow [SemVer](https://semver.org). The version lives in `gpui/Cargo.t
    .\gpui\scripts\package.ps1
    ```
 4. Smoke-test `dist\Dotsmith\dotsmith.exe` with the CUDA toolkit off the `PATH`. **Settings > GPU & memory** must show the card, which proves the bundled DLLs load.
-5. Commit it as `chore: release 1.2.3` and push to `master`. The `Release` workflow sees a version with no release yet, builds the same artifacts, tags `v1.2.3` and publishes **Dotsmith v1.2.3** with that version's `CHANGELOG.md` section, what to download, `SHA256SUMS.txt` and GitHub's generated changelog. Pushes that keep the version publish nothing.
+5. Commit it as `chore: release 1.2.3` and push to `master`. The `Release` workflow sees a version with no release yet, builds both packages (standard, and legacy for cards before RTX 30), tags `v1.2.3` and publishes **Dotsmith v1.2.3** with that version's `CHANGELOG.md` section, what to download, `SHA256SUMS.txt` and GitHub's generated changelog. Pushes that keep the version publish nothing.
 
 ## What a release contains
 
