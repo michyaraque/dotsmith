@@ -871,14 +871,13 @@ impl Studio {
                 .child(gpui::img(self.logo.clone()).w(px(52.)).h(px(52.)))
                 .child(div().flex().flex_col().gap(px(3.))
                     .child(div().text_size(px(20.)).font_weight(FontWeight::BOLD).text_color(rgb(TEXT())).child("Dotsmith"))
-                    .child(note(format!("{} {} · {}", tr!("Versión", "Version"), env!("CARGO_PKG_VERSION"),
-                        tr!("todo se ejecuta en tu PC", "everything runs on your PC"))))))
+                    .child(note(format!("{} {}", tr!("Versión", "Version"), env!("CARGO_PKG_VERSION"))))))
             .child(self.updates_rows(cx))
             .child(setting_row(tr!("Creado por", "Made by"), env!("CARGO_PKG_AUTHORS"),
                 div().flex().gap(px(8.))
                     .child(button_i("author-github", "external-link", "GitHub").on_click(|_, _, cx| cx.open_url(AUTHOR_GITHUB)))
                     .child(button_i("author-x", "external-link", "X").on_click(|_, _, cx| cx.open_url(AUTHOR_X)))))
-            .child(setting_row(tr!("Registros", "Logs"), tr!("Para adjuntar a un informe de error.", "To attach to a bug report."),
+            .child(setting_row(tr!("Registros", "Logs"), "",
                 button_i("open-logs", "file-text", tr!("Abrir", "Open")).on_click(cx.listener(move |_, _, _, cx| open_dir(&logs, cx)))))
             .when_some(config, |d, c| d.child(setting_row(tr!("Carpeta de ajustes", "Settings folder"), "settings.json · models.json",
                 button_i("open-config", "folder-open", tr!("Abrir", "Open")).on_click(cx.listener(move |_, _, _, cx| open_dir(&c, cx))))))
