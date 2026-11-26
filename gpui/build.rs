@@ -20,10 +20,14 @@ fn main() {
         } else {
             ["cublas64_12.dll", "cublasLt64_12.dll", "curand64_10.dll", "nvrtc64_120_0.dll"]
         };
-        for dll in std::iter::once("nvcuda.dll").chain(runtime) {
+        // CUDA 12 also links candle's static kernel library against the runtime and the driver
+        let legacy = (cuda_major() < 13).then_some(["cudart64_12.dll", "nvcuda.dll"]).into_iter().flatten();
+        for dll in runtime.into_iter().chain(legacy) {
             println!("cargo:rustc-link-arg-bins=/DELAYLOAD:{dll}");
         }
         println!("cargo:rustc-link-arg-bins=delayimp.lib");
+        // a C dependency asks for the static CRT (LNK4098); the app links the DLL one
+        println!("cargo:rustc-link-arg-bins=/NODEFAULTLIB:LIBCMT");
     }
 }
 
