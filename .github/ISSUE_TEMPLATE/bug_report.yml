@@ -1,0 +1,43 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what you got. Screenshots help.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Mode: Sprite, base: Krea 2 Turbo, LoRA: v2 final
+        2. Prompt: ...
+        3. Press Generate
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Dotsmith version
+      description: Settings > About
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and VRAM
+      description: Settings > GPU & memory
+      placeholder: "RTX 4070, 12 GB"
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: Settings > About > Logs > Open. Paste the last lines of dotsmith.log.
+      render: text
