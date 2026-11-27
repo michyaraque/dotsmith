@@ -505,8 +505,8 @@ impl Studio {
             .flex()
             .flex_col()
             .child(note(tr!(
-                "Solo hace falta para los modelos que piden aceptar una licencia, como Krea 2. Es gratis y se hace una vez.",
-                "Only needed for models that ask you to accept a license, such as Krea 2. It is free and done once."
+                "Solo hace falta para los archivos que piden aceptar una licencia. Es gratis y se hace una vez.",
+                "Only needed for files that ask you to accept a license. It is free and done once."
             )))
             .child(group(tr!("Conectar tu cuenta", "Connect your account")))
             .child(setting_row(

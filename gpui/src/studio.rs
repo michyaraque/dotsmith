@@ -336,6 +336,14 @@ struct FileRow {
     precision: Option<String>,
 }
 
+impl FileRow {
+    /// One of the default files a variant needs: its own diffusion model, or a file it shares with the other
+    /// variant (a Turbo-only extra counts for Turbo only). Readiness and the variant's download both use this.
+    fn needed_by(&self, turbo: bool) -> bool {
+        self.precision.is_none() && if self.role == "diffusion model" { self.turbo_only == turbo } else { !self.turbo_only || turbo }
+    }
+}
+
 #[derive(Clone)]
 struct RemoteFile {
     repo: String,
@@ -376,9 +384,8 @@ impl ModelState {
     fn variant_ready(&self, family: &str, turbo: bool) -> bool {
         let f = self.files_of(family);
         let covered = |r: &FileRow| r.found || f.iter().any(|o| o.found && o.role == r.role && o.turbo_only == r.turbo_only);
-        let own = |r: &FileRow| r.role == "diffusion model" && r.turbo_only == turbo && r.precision.is_none();
-        let shared = |r: &FileRow| r.role != "diffusion model" && !r.turbo_only && r.precision.is_none();
-        f.iter().any(own) && f.iter().filter(|r| own(r) || shared(r)).all(covered)
+        let own = |r: &FileRow| r.role == "diffusion model" && r.needed_by(turbo);
+        f.iter().any(own) && f.iter().filter(|r| r.needed_by(turbo)).all(covered)
     }
 
     /// Either variant is on disk (Turbo alone is enough).

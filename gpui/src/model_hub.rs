@@ -20,8 +20,8 @@ fn missing_bytes(s: &Studio, rows: &[FileRow]) -> (u64, bool) {
 
 /// The files `variant` needs: the shared ones plus its own diffusion model.
 fn variant_rows(rows: &[FileRow], turbo: bool) -> Vec<FileRow> {
-    // precision alternatives (bf16 ...) are optional: downloaded one by one, never with the variant
-    rows.iter().filter(|r| r.precision.is_none() && (r.turbo_only == turbo || !(r.role == "diffusion model"))).cloned().collect()
+    // only what this variant runs on: never the other variant's files, never the optional precision alternatives
+    rows.iter().filter(|r| r.needed_by(turbo)).cloned().collect()
 }
 
 pub(super) fn avatar(image: Option<std::sync::Arc<gpui::RenderImage>>, text: &str, size: f32) -> gpui::Div {
@@ -358,8 +358,8 @@ impl Studio {
                 .items_center()
                 .gap(px(12.))
                 .child(div().flex_1().child(tr!(
-                    "Este repo pide aceptar su licencia en Hugging Face (gratis). Con tu token añadido se ven la ficha y la descarga.",
-                    "This repo asks you to accept its license on Hugging Face (free). With your token added you get the card and the download."
+                    "Este repo pide aceptar su licencia en Hugging Face (gratis). Con tu token añadido se ve su ficha.",
+                    "This repo asks you to accept its license on Hugging Face (free). With your token added you see its card."
                 )))
                 .child(button_i("hub-token", "key-round", tr!("Configurar token", "Set up token")).on_click(cx.listener(|this, _, _, cx| {
                     this.hub_open = false;
