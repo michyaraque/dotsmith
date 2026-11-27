@@ -4285,13 +4285,10 @@ impl Studio {
 
     /// Right-click menu of the selected history result: what the result card offers, plus the shortcuts.
     fn context_menu(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) -> AnyElement {
-        let (w, h) = (230., 6. * 32. + 22.);
-        let (vw, vh) = self.viewport;
-        let x = f32::from(at.x).min(vw - w - 8.);
-        let y = f32::from(at.y).min(vh - h - 8.);
         let png = self.selected.clone();
+        let prompt = self.selected_item().and_then(|i| i.json["prompt"].as_str()).map(str::trim).filter(|p| !p.is_empty()).map(String::from);
         type Act = Box<dyn Fn(&mut Studio, &mut Context<Studio>)>;
-        let items: Vec<(&'static str, &str, Option<&str>, Act)> = vec![
+        let mut items: Vec<(&'static str, &str, Option<&str>, Act)> = vec![
             ("image-plus", tr!("Usar como origen", "Use as source"), None, Box::new(|s, cx| s.use_as_source(cx))),
             ("rotate-ccw", tr!("Reutilizar ajustes", "Reuse settings"), None, Box::new(|s, cx| s.reuse(cx))),
             ("copy", tr!("Copiar imagen", "Copy image"), Some("Ctrl C"), Box::new(|s, _| s.copy_image(false))),
@@ -4308,6 +4305,24 @@ impl Studio {
             ),
             ("trash-2", tr!("Mover a la papelera", "Move to Recycle Bin"), Some(tr!("Supr", "Del")), Box::new(|s, cx| s.delete_selected(cx))),
         ];
+        if let Some(prompt) = prompt {
+            items.insert(
+                3,
+                (
+                    "clipboard-copy",
+                    tr!("Copiar prompt", "Copy prompt"),
+                    None,
+                    Box::new(move |s, cx| {
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(prompt.clone()));
+                        s.say(tr!("Prompt copiado.", "Prompt copied."), Level::Info);
+                    }),
+                ),
+            );
+        }
+        let (w, h) = (230., items.len() as f32 * 32. + 22.);
+        let (vw, vh) = self.viewport;
+        let x = f32::from(at.x).min(vw - w - 8.);
+        let y = f32::from(at.y).min(vh - h - 8.);
         let rows: Vec<AnyElement> = items
             .into_iter()
             .enumerate()
