@@ -159,7 +159,7 @@ impl Studio {
             })
             .child(div().pt(px(14.)).pb(px(6.)).child(label(tr!("Tamaño del frame", "Frame size"))))
             .child(div().flex().gap(px(6.)).children(CELLS[camera].iter().enumerate().map(|(i, &(w, h))| {
-                chip(("ccell", i), &if w == h { format!("{w} px") } else { format!("{w} × {h}") }, cell == i).on_click(cx.listener(move |this, _, _, cx| {
+                chip(("ccell", i), &if w == h { format!("{w} px") } else { format!("{w}×{h} px") }, cell == i).on_click(cx.listener(move |this, _, _, cx| {
                     this.form_mut().size = i;
                     cx.notify();
                 }))

@@ -236,8 +236,11 @@ const PICTURE_SIZES: [(&str, u32, u32); 5] = [("512", 512, 512), ("768", 768, 76
 /// Results bigger than this are regular images: the viewer shows them as a texture instead of one quad per pixel.
 const SMOOTH_ABOVE: u32 = 256;
 const PACKS: [(&str, u32, u32); 5] = [("3×3 · 32", 3, 32), ("2×2 · 48", 2, 48), ("2×2 · 64", 2, 64), ("3×3 · 48", 3, 48), ("3×3 · 64", 3, 64)];
-const OUT_SIZES: [u32; 3] = [32, 64, 96];
-const DIRECT_SIZES: [u32; 5] = [32, 48, 64, 96, 128];
+const SQUARE_SIZES: [u32; 7] = [16, 32, 48, 64, 96, 128, 192];
+
+fn size_label(w: u32, h: u32) -> String {
+    if w == h { format!("{w} px") } else { format!("{w}×{h} px") }
+}
 const CAMERAS: [(&str, &str); 3] = [("Normal", "Normal"), ("45°", "Cenital 45° (propia)"), ("45° recto", "Cenital 45° · objeto recto")];
 
 fn camera_label(i: usize) -> &'static str {
@@ -563,7 +566,7 @@ impl Studio {
                     seed: cx.new(|cx| TextInput::new(cx, tr!("aleatoria", "random"), 1).mono()),
                     camera: 0,
                     size: match m {
-                        Mode::Photo => 2,
+                        Mode::Photo => 3,
                         Mode::Single => 1,
                         _ => 0,
                     },
@@ -1311,7 +1314,9 @@ impl Studio {
                 }
             }
         };
-        let picture = (mode == Mode::Single && !f.pixel && !self.plain_family()) || (mode == Mode::Regions && self.picture_source());
+        let picture = (mode == Mode::Single && !f.pixel && !self.plain_family())
+            || (mode == Mode::Regions && self.picture_source())
+            || (matches!(mode, Mode::Variants | Mode::Angle) && f.size == 0 && self.picture_source());
         let mut req = json!({"cmd": "generate", "mode": mode.key(), "prompt": prompt, "seed": seed, "steps": self.steps_of(f),
                              "camera": CAMERAS[f.camera].1, "lora_scale": if picture { 0. } else { self.lora_scale }, "template": template});
         match mode {
@@ -1358,11 +1363,15 @@ impl Studio {
                 req["strength"] = f.strength.into();
                 req["variants"] = f.variants.into();
                 req["guidance"] = f.guidance.into();
-                req["out_size"] = OUT_SIZES[f.size.min(2)].into();
+                req["out_size"] = match f.size {
+                    0 => 0,
+                    i => SQUARE_SIZES[(i - 1).min(SQUARE_SIZES.len() - 1)],
+                }
+                .into();
                 if mode == Mode::Photo {
                     req["opaque"] = f.opaque.into();
                     req["restyle"] = f.restyle.into();
-                    req["out_size"] = DIRECT_SIZES[f.size.min(4)].into();
+                    req["out_size"] = SQUARE_SIZES[f.size.min(SQUARE_SIZES.len() - 1)].into();
                 }
                 if mode == Mode::Regions {
                     if !self.mask.iter().any(|&b| b) {
@@ -1486,10 +1495,11 @@ impl Studio {
             }
             Mode::Photo => {
                 f.restyle = j["restyle"].as_bool().unwrap_or(false);
-                f.size = DIRECT_SIZES.iter().position(|&x| x as u64 == j["out_size"].as_u64().unwrap_or(64)).unwrap_or(2);
+                f.size = SQUARE_SIZES.iter().position(|&x| x as u64 == j["out_size"].as_u64().unwrap_or(64)).unwrap_or(3);
             }
             _ => {
-                f.size = OUT_SIZES.iter().position(|&x| x as u64 == j["out_size"].as_u64().unwrap_or(32)).unwrap_or(0);
+                let size = j["out_size"].as_u64().unwrap_or(32);
+                f.size = if j["original"].as_bool().unwrap_or(false) { 0 } else { SQUARE_SIZES.iter().position(|&x| x as u64 == size).map_or(0, |i| i + 1) };
             }
         }
         if mode.uses_source() {
@@ -3365,7 +3375,9 @@ impl Studio {
         let lora_scale = self.lora_scale;
         let has_lora = !self.model.lora.is_empty();
         let plain = self.plain_family();
-        let picture = (mode == Mode::Single && !plain && !f.pixel) || (mode == Mode::Regions && self.picture_source());
+        let picture = (mode == Mode::Single && !plain && !f.pixel)
+            || (mode == Mode::Regions && self.picture_source())
+            || (matches!(mode, Mode::Variants | Mode::Angle) && f.size == 0 && self.picture_source());
         let (pixel, picture_size) = (f.pixel, f.picture_size);
         let templated = !plain && !picture && matches!(mode, Mode::Single | Mode::Pack | Mode::Variants | Mode::Regions | Mode::Angle);
         let custom = self.template.read(cx).text().trim() != crate::jobs::TEMPLATE;
@@ -3478,18 +3490,6 @@ impl Studio {
                 })),
             ));
         }
-        // format
-        let sizes: Vec<(usize, String)> = match mode {
-            Mode::Single => SINGLE_SIZES
-                .iter()
-                .enumerate()
-                .filter(|(_, s)| self.size_ok(s.1, s.2) && (s.1 >= 32 || self.family_info().is_some_and(|f| f.sizes.contains(&s.1))))
-                .map(|(i, s)| (i, s.0.to_string()))
-                .collect(),
-            Mode::Pack => PACKS.iter().enumerate().map(|(i, s)| (i, s.0.to_string())).collect(),
-            Mode::Variants | Mode::Angle => OUT_SIZES.iter().enumerate().filter(|(_, s)| self.size_ok(**s, **s)).map(|(i, s)| (i, format!("{s}"))).collect(),
-            _ => vec![],
-        };
         if mode == Mode::Single && !plain {
             col = col.child(div().pt(px(8.)).child(
                 toggle("pixel", "Pixel art", tr!("Apagado: imagen normal, sin LoRA", "Off: a regular image, no LoRA"), pixel).on_click(cx.listener(
@@ -3502,25 +3502,53 @@ impl Studio {
             ));
         }
         let own_sizes = self.family_info().is_some_and(|f| !f.sizes.is_empty());
-        if picture && mode == Mode::Single {
-            col = col.child(section(tr!("Formato", "Format"))).child(div().flex().flex_wrap().gap(px(6.)).children(PICTURE_SIZES.iter().enumerate().map(
-                |(i, s)| {
-                    chip(("psize", i), s.0, picture_size == i).on_click(cx.listener(move |this, _, _, cx| {
-                        this.form_mut().picture_size = i;
-                        cx.notify();
-                    }))
+        let small_ok = |w: u32| w >= 32 || self.family_info().is_some_and(|f| f.sizes.contains(&w));
+        let square = |max: u32| -> Vec<(usize, u32)> {
+            SQUARE_SIZES.iter().copied().enumerate().filter(|&(_, s)| s <= max && self.size_ok(s, s) && small_ok(s)).collect()
+        };
+        let single_picture = mode == Mode::Single && picture;
+        let (options, current): (Vec<(usize, String, bool)>, usize) = match mode {
+            Mode::Single if picture => (PICTURE_SIZES.iter().enumerate().map(|(i, s)| (i, size_label(s.1, s.2), false)).collect(), picture_size),
+            Mode::Single => (
+                SINGLE_SIZES
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, s)| self.size_ok(s.1, s.2) && small_ok(s.1))
+                    .map(|(i, s)| (i, size_label(s.1, s.2), !own_sizes && s.1.max(s.2) > 32))
+                    .collect(),
+                size_ix,
+            ),
+            Mode::Pack => (PACKS.iter().enumerate().map(|(i, s)| (i, format!("{}×{} · {} px", s.1, s.1, s.2), false)).collect(), size_ix),
+            Mode::Variants | Mode::Angle => (
+                std::iter::once((0, tr!("Original", "Original").to_string(), false))
+                    .chain(square(192).into_iter().map(|(i, s)| (i + 1, size_label(s, s), false)))
+                    .collect(),
+                size_ix,
+            ),
+            Mode::Photo => (square(128).into_iter().map(|(i, s)| (i, size_label(s, s), false)).collect(), size_ix),
+            Mode::Regions => (vec![(0, tr!("Original", "Original").to_string(), false)], 0),
+            Mode::Walls => (vec![(0, format!("2×2 · {} px", crate::jobs::WALL_CELL), false)], 0),
+            _ => (vec![], 0),
+        };
+        if !options.is_empty() {
+            let fixed = matches!(mode, Mode::Regions | Mode::Walls);
+            col = col.child(section(tr!("Formato", "Format"))).child(div().flex().flex_wrap().gap(px(6.)).children(options.into_iter().map(
+                |(i, text, experimental)| {
+                    chip(("size", i), &text, current == i)
+                        .when(experimental, |d| d.tooltip(tooltip(tr!("Experimental: por encima de 32 px", "Experimental: above 32 px"))))
+                        .when(!fixed, |d| {
+                            d.on_click(cx.listener(move |this, _, _, cx| {
+                                let f = this.form_mut();
+                                if single_picture {
+                                    f.picture_size = i
+                                } else {
+                                    f.size = i
+                                }
+                                cx.notify();
+                            }))
+                        })
                 },
             )));
-        } else if !sizes.is_empty() {
-            let experimental = |i: usize| !own_sizes && mode == Mode::Single && SINGLE_SIZES[i].1.max(SINGLE_SIZES[i].2) > 32;
-            col = col.child(section(tr!("Formato", "Format"))).child(div().flex().flex_wrap().gap(px(6.)).children(sizes.into_iter().map(|(i, s)| {
-                chip(("size", i), &s, size_ix == i)
-                    .when(experimental(i), |d| d.tooltip(tooltip(tr!("Experimental: por encima de 32 px", "Experimental: above 32 px"))))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.form_mut().size = i;
-                        cx.notify();
-                    }))
-            })));
         }
         if mode == Mode::Angle {
             col = col.child(section(tr!("Ángulo", "Angle"))).child(self.gizmo_panel(cx));
@@ -3573,43 +3601,36 @@ impl Studio {
         }
         let restyle = mode == Mode::Photo && self.form().restyle;
         if mode == Mode::Photo {
-            let (opaque, size) = (self.form().opaque, self.form().size.min(4));
-            col = col
-                .child(section(tr!("Tamaño", "Size")))
-                .child(div().flex().flex_wrap().gap(px(6.)).children(DIRECT_SIZES.iter().enumerate().map(|(i, s)| {
-                    chip(("dsize", i), &format!("{s} px"), size == i).on_click(cx.listener(move |this, _, _, cx| {
-                        this.form_mut().size = i;
-                        cx.notify();
-                    }))
-                })))
-                .child(
-                    div()
-                        .pt(px(8.))
-                        .child(
-                            toggle("restyle", tr!("Redibujar con IA", "Redraw with AI"), tr!("Apagado: solo pixelado", "Off: pixelation only"), restyle)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    let f = this.form_mut();
-                                    f.restyle = !f.restyle;
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            toggle(
-                                "opaque",
-                                tr!("Fondo opaco", "Opaque background"),
-                                tr!(
-                                    "Apagado: se quita un fondo liso y se recorta al objeto",
-                                    "Off: a flat background is removed and the image cropped to the object"
-                                ),
-                                opaque,
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| {
+            let opaque = self.form().opaque;
+            col = col.child(
+                div()
+                    .pt(px(8.))
+                    .child(
+                        toggle("restyle", tr!("Redibujar con IA", "Redraw with AI"), tr!("Apagado: solo pixelado", "Off: pixelation only"), restyle).on_click(
+                            cx.listener(|this, _, _, cx| {
                                 let f = this.form_mut();
-                                f.opaque = !f.opaque;
+                                f.restyle = !f.restyle;
                                 cx.notify();
-                            })),
+                            }),
                         ),
-                );
+                    )
+                    .child(
+                        toggle(
+                            "opaque",
+                            tr!("Fondo opaco", "Opaque background"),
+                            tr!(
+                                "Apagado: se quita un fondo liso y se recorta al objeto",
+                                "Off: a flat background is removed and the image cropped to the object"
+                            ),
+                            opaque,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let f = this.form_mut();
+                            f.opaque = !f.opaque;
+                            cx.notify();
+                        })),
+                    ),
+            );
         }
         if mode.uses_source() && (mode != Mode::Photo || restyle) {
             let sname = match mode {

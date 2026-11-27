@@ -658,7 +658,7 @@ fn restyle_sprite(c: &mut Ctx, r: &Value, info: &Conversion, sprite_px: RgbaImag
 /// Wall-set pieces in sheet order (row-major 2x2: pile, north / east, corner), the v16 / krea2 wall captions' layout.
 const WALL_PIECES: [(&str, &str); 4] =
     [("wall pile", "short post"), ("north wall", "long straight section"), ("east wall", "long straight section"), ("wall corner", "L-shaped join")];
-const WALL_CELL: usize = 64;
+pub const WALL_CELL: usize = 64;
 
 /// The wall-set caption the wall LoRAs are trained on. `desc` is either a full
 /// per-piece body (contains "wall pile:"), used as is, or "<material>, <details>…": the material names every piece and
