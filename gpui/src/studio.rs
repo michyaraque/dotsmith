@@ -17,6 +17,8 @@ use crate::backend::{Backend, Folders, Live, Msg};
 use crate::settings::{Settings, WindowState};
 use crate::tr;
 
+#[path = "animate_mode.rs"]
+mod animate_mode;
 #[path = "creature_mode.rs"]
 mod creature_mode;
 #[path = "model_hub.rs"]
@@ -154,9 +156,11 @@ pub enum Mode {
     Pose,
     Creature,
     Walls,
+    Animate,
 }
 /// Rail order: what is made from a description, then what starts from an image.
-const MODES: [Mode; 9] = [Mode::Single, Mode::Pack, Mode::Walls, Mode::Creature, Mode::Variants, Mode::Regions, Mode::Angle, Mode::Photo, Mode::Pose];
+const MODES: [Mode; 10] =
+    [Mode::Single, Mode::Pack, Mode::Walls, Mode::Creature, Mode::Variants, Mode::Regions, Mode::Angle, Mode::Photo, Mode::Animate, Mode::Pose];
 const CREATE_MODES: usize = 4;
 
 impl Mode {
@@ -171,6 +175,7 @@ impl Mode {
             Mode::Pose => "pose",
             Mode::Creature => "creature",
             Mode::Walls => "walls",
+            Mode::Animate => "animate",
         }
     }
     fn from_key(k: &str) -> Option<Mode> {
@@ -187,6 +192,7 @@ impl Mode {
             Mode::Pose => "Pose",
             Mode::Creature => tr!("Personaje", "Character"),
             Mode::Walls => tr!("Muros", "Walls"),
+            Mode::Animate => tr!("Animar", "Animate"),
         }
     }
     fn glyph(self) -> &'static str {
@@ -200,6 +206,7 @@ impl Mode {
             Mode::Pose => "person-standing",
             Mode::Creature => "footprints",
             Mode::Walls => "brick-wall",
+            Mode::Animate => "zap",
         }
     }
     fn title(self) -> &'static str {
@@ -213,10 +220,11 @@ impl Mode {
             Mode::Pose => tr!("Pose y silueta", "Pose and silhouette"),
             Mode::Creature => tr!("Personaje animado", "Animated character"),
             Mode::Walls => tr!("Set de muros", "Wall set"),
+            Mode::Animate => tr!("Animación de objetos", "Item animation"),
         }
     }
     fn uses_source(self) -> bool {
-        matches!(self, Mode::Variants | Mode::Regions | Mode::Photo | Mode::Angle)
+        matches!(self, Mode::Variants | Mode::Regions | Mode::Photo | Mode::Angle | Mode::Animate)
     }
 }
 
@@ -500,6 +508,8 @@ pub struct Studio {
     pose: rig::Pose,
     pose_sheet: bool,
     pose_playing: bool,
+    animate: animate_mode::AnimateState,
+    animate_hex: Entity<TextInput>,
     pose_tick: Instant,
     menu_open: bool,
     settings: Settings,
@@ -546,61 +556,64 @@ impl Studio {
     pub fn new(settings: Settings, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let updater = crate::update::Updater::start(settings.check_updates.unwrap_or(true));
         // stored in enum order: forms[mode as usize]; MODES is only the rail order
-        let forms: Vec<Form> = [Mode::Single, Mode::Pack, Mode::Variants, Mode::Regions, Mode::Photo, Mode::Angle, Mode::Pose, Mode::Creature, Mode::Walls]
-            .iter()
-            .map(|m| {
-                let ph = match m {
-                    Mode::Single => "A short silver wand with a bright blue crystal, a dark leather grip and gold rings.",
-                    Mode::Pack => "Nine elemental wands. Row 1: fire, ice, nature. Row 2: lightning, holy, shadow. Row 3: water, poison, arcane.",
-                    Mode::Variants => "A crimson leather cover with an orange flame emblem and a red bookmark ribbon.",
-                    Mode::Regions => "Turn the selected gem into a glowing green emerald.",
-                    Mode::Photo => "An orc warrior in iron armour holding a spear.",
-                    Mode::Angle => "A wooden treasure chest with iron bands and a gold lock.",
-                    Mode::Pose => "",
-                    Mode::Creature => "Skeleton warrior, bone white body, rusty iron helmet, round wooden shield, undead.",
-                    Mode::Walls => "cotton candy, fluffy pastel pink spun sugar, baby blue swirls, white sugar sparkles, puffy rounded top, candy land wall",
-                };
-                let lines = if *m == Mode::Pack { 6 } else { 4 };
-                Form {
-                    prompt: cx.new(|cx| TextInput::new(cx, ph, lines).pad_right(28.).with_max_lines(if *m == Mode::Pack { 11 } else { PANEL_LINES.1 })),
-                    seed: cx.new(|cx| TextInput::new(cx, tr!("aleatoria", "random"), 1).mono()),
-                    camera: 0,
-                    size: match m {
-                        Mode::Photo => 3,
-                        Mode::Single => 1,
-                        _ => 0,
-                    },
-                    opaque: false,
-                    center: false,
-                    mirror: false,
-                    strength: match m {
-                        Mode::Regions => 0.8,
-                        Mode::Angle => 0.65,
-                        _ => 0.45,
-                    },
-                    variants: match m {
-                        Mode::Regions => 1,
-                        _ => 3,
-                    },
-                    guidance: match m {
-                        Mode::Regions => 5.0,
-                        _ => 3.0,
-                    },
-                    steps: (*m == Mode::Creature).then_some(30),
-                    turbo_steps: None,
-                    pitch: 45.,
-                    yaw: 0.,
-                    warp: true,
-                    all_dirs: true,
-                    dir: 0,
-                    kind: 0,
-                    room: true,
-                    restyle: true,
-                    pixel: true,
-                    picture_size: 2,
-                }
-            })
-            .collect();
+        let forms: Vec<Form> =
+            [Mode::Single, Mode::Pack, Mode::Variants, Mode::Regions, Mode::Photo, Mode::Angle, Mode::Pose, Mode::Creature, Mode::Walls, Mode::Animate]
+                .iter()
+                .map(|m| {
+                    let ph = match m {
+                        Mode::Single => "A short silver wand with a bright blue crystal, a dark leather grip and gold rings.",
+                        Mode::Pack => "Nine elemental wands. Row 1: fire, ice, nature. Row 2: lightning, holy, shadow. Row 3: water, poison, arcane.",
+                        Mode::Variants => "A crimson leather cover with an orange flame emblem and a red bookmark ribbon.",
+                        Mode::Regions => "Turn the selected gem into a glowing green emerald.",
+                        Mode::Photo => "An orc warrior in iron armour holding a spear.",
+                        Mode::Angle => "A wooden treasure chest with iron bands and a gold lock.",
+                        Mode::Pose | Mode::Animate => "",
+                        Mode::Creature => "Skeleton warrior, bone white body, rusty iron helmet, round wooden shield, undead.",
+                        Mode::Walls => {
+                            "cotton candy, fluffy pastel pink spun sugar, baby blue swirls, white sugar sparkles, puffy rounded top, candy land wall"
+                        }
+                    };
+                    let lines = if *m == Mode::Pack { 6 } else { 4 };
+                    Form {
+                        prompt: cx.new(|cx| TextInput::new(cx, ph, lines).pad_right(28.).with_max_lines(if *m == Mode::Pack { 11 } else { PANEL_LINES.1 })),
+                        seed: cx.new(|cx| TextInput::new(cx, tr!("aleatoria", "random"), 1).mono()),
+                        camera: 0,
+                        size: match m {
+                            Mode::Photo => 3,
+                            Mode::Single => 1,
+                            _ => 0,
+                        },
+                        opaque: false,
+                        center: false,
+                        mirror: false,
+                        strength: match m {
+                            Mode::Regions => 0.8,
+                            Mode::Angle => 0.65,
+                            _ => 0.45,
+                        },
+                        variants: match m {
+                            Mode::Regions => 1,
+                            _ => 3,
+                        },
+                        guidance: match m {
+                            Mode::Regions => 5.0,
+                            _ => 3.0,
+                        },
+                        steps: (*m == Mode::Creature).then_some(30),
+                        turbo_steps: None,
+                        pitch: 45.,
+                        yaw: 0.,
+                        warp: true,
+                        all_dirs: true,
+                        dir: 0,
+                        kind: 0,
+                        room: true,
+                        restyle: true,
+                        pixel: true,
+                        picture_size: 2,
+                    }
+                })
+                .collect();
         if let Some(text) = std::env::args().skip_while(|a| a != "--prompt").nth(1) {
             let start_mode =
                 std::env::args().skip_while(|a| a != "--mode").nth(1).or(settings.last_mode.clone()).and_then(|k| Mode::from_key(&k)).unwrap_or(Mode::Single);
@@ -719,6 +732,8 @@ impl Studio {
             pose: rig::Pose::default(),
             pose_sheet: false,
             pose_playing: true,
+            animate: Default::default(),
+            animate_hex: cx.new(|cx| TextInput::new(cx, "#RRGGBB", 1).mono()),
             pose_tick: Instant::now(),
             menu_open: std::env::args().any(|a| a == "--open-tools"),
             settings_open: std::env::args().any(|a| a == "--open-settings"),
@@ -771,7 +786,7 @@ impl Studio {
 
     /// Whether the loaded family can run `m` (Pose needs no model).
     fn mode_ok(&self, m: Mode) -> bool {
-        m == Mode::Pose || self.family_info().is_none_or(|f| f.modes.is_empty() || f.modes.iter().any(|k| k == m.key()))
+        matches!(m, Mode::Pose | Mode::Animate) || self.family_info().is_none_or(|f| f.modes.is_empty() || f.modes.iter().any(|k| k == m.key()))
     }
 
     fn size_ok(&self, w: u32, h: u32) -> bool {
@@ -831,8 +846,10 @@ impl Studio {
             self.pose.frame = (self.pose.frame + 1) % rig::FRAMES;
             cx.notify();
         }
-        // a selected creature sheet plays its walk cycle
-        if let Some(n) = self.selected_item().and_then(|i| creature_mode::SheetInfo::of(&i.json)).map(|s| s.len())
+        // a selected sheet plays its loop; in Animate with none selected, the live preview does
+        let sheet = self.selected_item().and_then(|i| creature_mode::SheetInfo::of(&i.json)).map(|s| s.len());
+        let live = if sheet.is_none() && self.mode == Mode::Animate { self.animate_frames().map(|f| f.len()) } else { None };
+        if let Some(n) = sheet.or(live)
             && self.anim.advance(n)
         {
             cx.notify();
@@ -1164,6 +1181,9 @@ impl Studio {
             self.trash.push(b);
         }
         let item = png.as_ref().and_then(|p| self.history.iter().find(|i| &i.png == p));
+        if let Some(fps) = item.filter(|i| i.json["mode"] == "animate").and_then(|i| i.json["fps"].as_u64()) {
+            self.anim.fps = fps as u32;
+        }
         self.big = item.map(|i| Arc::new(i.sprite.clone()));
         self.small = item.map(|i| {
             let (w, h) = i.sprite.dimensions();
@@ -1269,7 +1289,7 @@ impl Studio {
         if self.running || self.pending {
             return;
         }
-        if self.mode != Mode::Pose && self.model.gpu.is_some() && !self.model.can_generate() {
+        if !matches!(self.mode, Mode::Pose | Mode::Animate) && self.model.gpu.is_some() && !self.model.can_generate() {
             self.settings_tab = if self.model.gpu.as_ref().is_some_and(|g| !g.ok) { settings_view::Tab::Gpu } else { settings_view::Tab::Models };
             self.settings_open = true;
             self.say(
@@ -1281,6 +1301,10 @@ impl Studio {
         }
         if self.mode == Mode::Pose {
             self.save_pose(false, cx);
+            return;
+        }
+        if self.mode == Mode::Animate {
+            self.save_animation(cx);
             return;
         }
         if !self.mode_ok(self.mode) {
@@ -1501,6 +1525,9 @@ impl Studio {
                 let size = j["out_size"].as_u64().unwrap_or(32);
                 f.size = if j["original"].as_bool().unwrap_or(false) { 0 } else { SQUARE_SIZES.iter().position(|&x| x as u64 == size).map_or(0, |i| i + 1) };
             }
+        }
+        if mode == Mode::Animate {
+            self.restore_animation(&j);
         }
         if mode.uses_source() {
             let src = PathBuf::from(s("source"));
@@ -3476,7 +3503,13 @@ impl Studio {
                 })
                 .into_any_element()
         };
-        col = col.child(section(if mode == Mode::Pack { tr!("Dirección del pack", "Pack direction") } else { tr!("Descripción", "Description") })).child(field);
+        if mode == Mode::Animate {
+            col = col.child(self.animate_options(cx));
+        } else {
+            col = col
+                .child(section(if mode == Mode::Pack { tr!("Dirección del pack", "Pack direction") } else { tr!("Descripción", "Description") }))
+                .child(field);
+        }
         if mode == Mode::Creature {
             col = col.child(self.creature_options(cx));
         }
@@ -3553,7 +3586,7 @@ impl Studio {
         if mode == Mode::Angle {
             col = col.child(section(tr!("Ángulo", "Angle"))).child(self.gizmo_panel(cx));
         }
-        if !plain && !picture && !matches!(mode, Mode::Photo | Mode::Angle | Mode::Creature | Mode::Walls) {
+        if !plain && !picture && !matches!(mode, Mode::Photo | Mode::Angle | Mode::Creature | Mode::Walls | Mode::Animate) {
             col = col.child(div().pt(px(12.)).pb(px(6.)).child(label(tr!("Ángulo de cámara", "Camera angle")))).child(div().flex().gap(px(6.)).children(
                 (0..CAMERAS.len()).map(|i| {
                     chip(("cam", i), camera_label(i), camera == i)
@@ -3632,7 +3665,7 @@ impl Studio {
                     ),
             );
         }
-        if mode.uses_source() && (mode != Mode::Photo || restyle) {
+        if mode.uses_source() && mode != Mode::Animate && (mode != Mode::Photo || restyle) {
             let sname = match mode {
                 Mode::Regions => tr!("Intensidad en la zona", "Strength in the area"),
                 Mode::Photo => tr!("Estilización", "Stylisation"),
@@ -3669,6 +3702,9 @@ impl Studio {
         if has_lora && (lora_scale - 1.).abs() > 0.001 {
             summary.push_str(&format!(" · LoRA {lora_scale:.2}"));
         }
+        if mode == Mode::Animate {
+            summary = format!("{} frames · {} ms", self.animate.settings.frames, 1000 / self.animate.fps.max(1));
+        }
         let open = self.advanced_open;
         col = col.child(
             div()
@@ -3688,7 +3724,9 @@ impl Studio {
                 .child(div().flex_1().h(px(1.)).mx(px(4.)).bg(rgb(BORDER_SOFT())))
                 .when(!open, |d| d.child(div().font_family(MONO).text_size(px(10.5)).text_color(rgb(MUTED_2())).child(summary))),
         );
-        if open {
+        if open && mode == Mode::Animate {
+            col = col.child(self.animate_advanced(cx));
+        } else if open {
             col = col
                 .child(
                     div()
@@ -3756,7 +3794,7 @@ impl Studio {
                         .child(icon_btn("lora-plus", "plus").on_click(cx.listener(|this, _, _, cx| this.nudge_lora(0.05, cx)))),
                 );
             }
-            if mode.uses_source() && (mode != Mode::Photo || restyle) {
+            if mode.uses_source() && mode != Mode::Animate && (mode != Mode::Photo || restyle) {
                 col = col.child(self.stepper(
                     "guidance",
                     tr!("Fuerza del prompt", "Prompt strength"),
@@ -3815,6 +3853,7 @@ impl Studio {
                         Mode::Photo => tr!("Convertir a pixel art", "Convert to pixel art"),
                         Mode::Angle => tr!("Redibujar en este ángulo", "Redraw at this angle"),
                         Mode::Pose => tr!("Guardar pose", "Save pose"),
+                        Mode::Animate => tr!("Guardar animación", "Save animation"),
                         Mode::Creature => tr!("Generar personaje", "Generate character"),
                         Mode::Walls => tr!("Generar muros", "Generate walls"),
                     })
@@ -3862,6 +3901,9 @@ impl Studio {
             None
         } else if self.mode == Mode::Pose {
             Some(Arc::new(self.pose_image(false)))
+        } else if self.mode == Mode::Animate && self.source.is_some() && !self.selected_item().is_some_and(|i| creature_mode::SheetInfo::of(&i.json).is_some())
+        {
+            self.animate_frame()
         } else {
             self.big.clone()
         };
@@ -3926,12 +3968,11 @@ impl Studio {
                 .items_center()
                 .gap(px(8.))
                 .child(icon("image").size(px(28.)).text_color(rgb(MUTED_2())))
-                .child(
-                    div()
-                        .text_size(px(13.))
-                        .text_color(rgb(MUTED()))
-                        .child(tr!("Describe lo que quieres y pulsa Ctrl + Intro.", "Describe what you want and press Ctrl + Enter.")),
-                )
+                .child(div().text_size(px(13.)).text_color(rgb(MUTED())).child(if self.mode == Mode::Animate {
+                    tr!("Carga un sprite para animarlo.", "Load a sprite to animate it.")
+                } else {
+                    tr!("Describe lo que quieres y pulsa Ctrl + Intro.", "Describe what you want and press Ctrl + Enter.")
+                }))
                 .into_any_element()
         };
         let area = self.view_area.clone();
@@ -3956,7 +3997,7 @@ impl Studio {
         };
         let player = creature.map(|(png, sheet, info)| self.creature_player(png, sheet, info, scale, cx));
         let has_player = player.is_some();
-        let thumbs = (!running && !has_player && self.mode != Mode::Pose).then(|| self.small.clone()).flatten();
+        let thumbs = (!running && !has_player && !matches!(self.mode, Mode::Pose | Mode::Animate)).then(|| self.small.clone()).flatten();
         let square = div()
             .id("viewer")
             .relative()
@@ -4229,7 +4270,7 @@ impl Studio {
                     .border_color(rgb(BORDER_SOFT()))
                     .child(div().text_size(px(12.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(TEXT())).child(if running {
                         tr!("Generando", "Generating")
-                    } else if self.mode == Mode::Pose {
+                    } else if self.mode == Mode::Pose || (self.mode == Mode::Animate && self.selected.is_none() && self.source.is_some()) {
                         tr!("Vista previa", "Preview")
                     } else {
                         tr!("Resultado", "Result")

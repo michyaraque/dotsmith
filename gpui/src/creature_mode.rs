@@ -48,7 +48,7 @@ pub struct SheetInfo {
 
 impl SheetInfo {
     pub fn of(json: &Value) -> Option<SheetInfo> {
-        (json["mode"].as_str() == Some("creature")).then(|| {
+        matches!(json["mode"].as_str(), Some("creature" | "animate")).then(|| {
             let frames = json["frames"].as_u64().unwrap_or(8) as usize;
             let play: Vec<usize> = json["play"]
                 .as_array()
@@ -82,6 +82,11 @@ pub fn export_gifs(png: &Path, sheet: &RgbaImage, info: &SheetInfo, fps: u32) ->
     let stem = png.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
     let (c, ch) = (info.cell, info.cell_h);
     let rows: Vec<Vec<RgbaImage>> = (0..info.dirs.len() as u32).map(|r| (0..info.len()).map(|f| anim::frame(sheet, c, ch, r, info.col(f))).collect()).collect();
+    if rows.len() == 1 {
+        let out = png.with_file_name(format!("{stem}_{fps}fps.gif"));
+        std::fs::write(&out, anim::gif(&rows[0], fps, 4)?)?;
+        return Ok(out);
+    }
     for (d, frames) in info.dirs.iter().zip(&rows) {
         std::fs::write(png.with_file_name(format!("{stem}_{d}_{fps}fps.gif")), anim::gif(frames, fps, 4)?)?;
     }
@@ -279,7 +284,7 @@ impl Studio {
                     .child(div().font_family(MONO).text_size(px(11.5)).text_color(rgb(TEXT())).child(format!("frame {} / {n}", frame + 1)))
                     .child(div().flex_1())
                     .child(div().text_size(px(11.)).text_color(rgb(MUTED_2())).child("fps"))
-                    .children([4u32, 6, 8, 12].into_iter().map(|v| {
+                    .children(super::animate_mode::FPS.into_iter().map(|v| {
                         chip(("cfps", v as usize), &v.to_string(), fps == v).on_click(cx.listener(move |this, _, _, cx| {
                             this.anim.fps = v;
                             cx.notify();

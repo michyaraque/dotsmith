@@ -9,6 +9,7 @@ mod i18n;
 mod icons;
 mod input;
 mod instance;
+mod item_anim;
 mod jobs;
 mod log;
 mod pack_split;
