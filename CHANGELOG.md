@@ -2,6 +2,16 @@
 
 All notable changes to Dotsmith. The format follows [Keep a Changelog](https://keepachangelog.com) and versions follow [SemVer](https://semver.org).
 
+## [1.3.1] - 2026-11-27
+
+### Fixed
+- Krea 2 Turbo downloads without accepting Krea 2 Raw's license: the VAE both variants share now comes from a repo with no license gate, and every model's default files download without a Hugging Face token.
+- Each variant downloads only the files it runs on.
+- Testing the Hugging Face token no longer freezes the app.
+
+### Changed
+- The Hugging Face token is hidden, with a button to show it.
+
 ## [1.3.0] - 2026-11-27
 
 Dotsmith updates itself from now on.
