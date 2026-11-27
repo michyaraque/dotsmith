@@ -537,6 +537,13 @@ impl Studio {
                     .items_center()
                     .gap(px(6.))
                     .child(div().w(px(240.)).child(self.hf_token.clone()))
+                    .child({
+                        let hidden = self.hf_token.read(cx).is_masked();
+                        icon_btn("hf-reveal", if hidden { "eye" } else { "eye-off" }).w(px(30.)).h(px(30.)).on_click(cx.listener(move |this, _, _, cx| {
+                            this.hf_token.update(cx, |t, cx| t.set_masked(!hidden, cx));
+                            cx.notify();
+                        }))
+                    })
                     .child(button_i("hf-test", "key-round", tr!("Probar", "Test")).on_click(cx.listener(|this, _, _, cx| this.test_token(cx)))),
             ))
             .children(result.map(|r| div().pt(px(4.)).pb(px(12.)).child(r)))

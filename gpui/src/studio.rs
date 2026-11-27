@@ -615,7 +615,7 @@ impl Studio {
         window.focus(&focus);
         let token = settings.hf_token.clone().unwrap_or_default();
         let hf_token = cx.new(|cx| {
-            let mut t = TextInput::new(cx, "hf_…", 1).mono();
+            let mut t = TextInput::new(cx, "hf_…", 1).mono().masked().with_max_lines(1);
             t.set_text(&token, cx);
             t
         });
