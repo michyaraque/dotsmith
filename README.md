@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-1.4.0-eee2cb?style=flat-square">
+  <img alt="Version" src="https://img.shields.io/badge/version-1.5.0-eee2cb?style=flat-square">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-1c1a17?style=flat-square">
   <img alt="GPU" src="https://img.shields.io/badge/GPU-NVIDIA%20RTX%2030%2B%20%C2%B7%206%20GB-76b900?style=flat-square">
   <img alt="Rust" src="https://img.shields.io/badge/built%20with-Rust-b7410e?style=flat-square">
@@ -34,6 +34,7 @@ Dotsmith is a desktop app for making game-ready pixel art. Describe an object an
 | **Angle** | The same object redrawn from another camera angle, set with a 3D gizmo. |
 | **Regions** | Repaint only the pixels you paint; everything else stays identical. |
 | **Image** | A photo or illustration converted to pixel art, with or without AI. |
+| **Animate** | An ambient loop over a sprite, built from layered effects (fire, frost, shockwave, heartbeat…), with no AI. |
 | **Pose** | A posable silhouette rig to use as a starting point for Variants. |
 
 Base models, all running on Dotsmith's own Rust + CUDA engine:

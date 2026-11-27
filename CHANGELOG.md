@@ -2,6 +2,14 @@
 
 All notable changes to Dotsmith. The format follows [Keep a Changelog](https://keepachangelog.com) and versions follow [SemVer](https://semver.org).
 
+## [1.5.0] - 2026-11-28
+
+### Added
+- Animate tab: gives a sprite a seamless ambient loop without the AI or the GPU, previewed live as you change it. The loop is saved as a one-row sheet with its settings, plays in the sheet player and exports to GIF.
+- The loop is a stack of layers, one effect each. Every layer has its own area (automatic, the whole item, the glowing parts, a colour picked from the sprite, or painted on it), colour, strength, repeats per loop and amount, and can be hidden without removing it.
+- 24 effects: pulse, glint, twinkle, shine, aura, blink, hue, plasma, shockwave, trail, veins, arcs, orbit, sparks, bubbles, smoke, drip, heat, flames, frost, icicles, snow, wave and heartbeat. Plasma, shockwave, veins, wave and heartbeat start from a point you click on the sprite.
+- Element presets (fire, ice, energy, earth, death, holy) load their layers ready to edit.
+
 ## [1.4.0] - 2026-11-27
 
 ### Added

@@ -26,6 +26,7 @@ Dotsmith es una aplicación de escritorio para crear pixel art listo para juegos
 | **Ángulo** | El mismo objeto redibujado desde otra cámara, elegida con un gizmo 3D. |
 | **Zonas** | Repinta solo los píxeles que marques; el resto queda idéntico. |
 | **Imagen** | Una foto o ilustración convertida a pixel art, con IA o sin ella. |
+| **Animar** | Un bucle de ambiente sobre un sprite, hecho con capas de efectos (fuego, escarcha, onda de choque, latido…), sin IA. |
 | **Pose** | Un rig de silueta posable como punto de partida para Variantes. |
 
 Modelos base, todos sobre el motor propio de Dotsmith en Rust + CUDA:
