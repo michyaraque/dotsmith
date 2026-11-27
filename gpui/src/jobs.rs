@@ -266,6 +266,7 @@ fn run_engine_with(c: &mut Ctx, req: &Request, key: bool, mut on_sample: impl Fn
 pub fn generate(c: &mut Ctx, r: &Value) -> Result<String> {
     let mode = r["mode"].as_str().unwrap_or("single").to_string();
     match mode.as_str() {
+        "single" if r["pixel"].as_bool() == Some(false) => picture_mode(c, r),
         "single" | "pack" => text_mode(c, r, &mode),
         "creature" => creature_mode(c, r),
         "walls" => walls_mode(c, r),
@@ -391,6 +392,52 @@ fn text_mode(c: &mut Ctx, r: &Value, mode: &str) -> Result<String> {
     })?;
     let secs = started.elapsed().as_secs_f64();
     Ok(format!("{}{} {} · {:.1} s", if stopped { tr!("Detenido · ", "Stopped · ") } else { "" }, saved, if single { "sprite" } else { "pack" }, secs))
+}
+
+fn picture_mode(c: &mut Ctx, r: &Value) -> Result<String> {
+    let desc = r["prompt"].as_str().unwrap_or("").trim().to_string();
+    if desc.is_empty() {
+        bail!(tr!("Describe la imagen que quieres generar.", "Describe the image you want to generate."));
+    }
+    let (w, h) = (r["width"].as_u64().unwrap_or(1024) as usize, r["height"].as_u64().unwrap_or(1024) as usize);
+    let seed = pick_seed(&r["seed"]);
+    let req = adapt(
+        c,
+        &Request {
+            prompt: desc.clone(),
+            negative: String::new(),
+            width: w,
+            height: h,
+            steps: r["steps"].as_u64().unwrap_or(25) as usize,
+            guidance: 3.0,
+            seed,
+            count: 1,
+            init: None,
+            mask: None,
+            strength: 1.0,
+            preview_every: 1,
+            opaque: true,
+        },
+    );
+    let started = Instant::now();
+    let mut saved = 0;
+    let stopped = run_engine_with(c, &req, false, |c, _, mut img| {
+        for p in img.pixels_mut() {
+            p.0[3] = 255;
+        }
+        let st = json!({"mode": "single", "pixel": false, "prompt": desc, "seed": seed, "steps": req.steps, "guidance": req.guidance,
+            "full_prompt": req.prompt, "width": w, "height": h, "width_px": w, "height_px": h,
+            "seconds": (started.elapsed().as_secs_f64() * 10.0).round() / 10.0});
+        save(c, "single", seed, &img, st)?;
+        saved += 1;
+        Ok(())
+    })?;
+    Ok(format!(
+        "{}{saved} {} · {w} × {h} · {:.1} s",
+        if stopped { tr!("Detenido · ", "Stopped · ") } else { "" },
+        tr!("imagen", "image"),
+        started.elapsed().as_secs_f64()
+    ))
 }
 
 /// "Imagen": any picture to an `out_size` x `out_size` sprite, the picture fitted inside without distortion (resting on
@@ -966,13 +1013,122 @@ fn creature_grid(c: &mut Ctx, r: &Value, desc: &str, w: &catalog::WalkFormat) ->
 }
 
 /// The 32x32 sprite the region mask paints on, exactly as the region mode builds it.
-pub fn prepared_sprite(source: &Path, scale: u32) -> Result<RgbaImage> {
+pub fn prepared_sprite(source: &Path) -> Result<RgbaImage> {
     let im = image::open(source).with_context(|| format!("open {}", source.display()))?.to_rgba8();
     if im.width() > 2048 || im.height() > 2048 {
         bail!(tr!("Usa una imagen de hasta 2048 × 2048 píxeles.", "Use an image of at most 2048 × 2048 pixels."));
     }
-    let canvas = sprite::fit_canvas(&im, scale * 32);
-    Ok(imageops::resize(&canvas, 32, 32, imageops::FilterType::Nearest))
+    if is_picture(im.width(), im.height()) {
+        return Ok(smooth_canvas(&im, PICTURE_MASK));
+    }
+    Ok(sprite::fit_canvas(&im, im.width().max(im.height())))
+}
+
+/// Model canvas for a sprite of `out` px: the version's scale per sprite pixel, raised for tiny sprites (at least 256 px)
+/// and lowered for big sheets (at most 1536 px), a multiple of 16 when one fits.
+fn regions_side(scale: usize, out: usize) -> usize {
+    let out = out.max(1);
+    let k = scale.max(256usize.div_ceil(out)).min(1536 / out).max(1);
+    (1..=k).rev().find(|k| (k * out).is_multiple_of(16)).unwrap_or(k) * out
+}
+
+pub const PICTURE_MASK: u32 = 64;
+const PICTURE_SIDE: u32 = 1024;
+
+pub fn is_picture(w: u32, h: u32) -> bool {
+    w.max(h) > 256
+}
+
+fn smooth_canvas(im: &RgbaImage, side: u32) -> RgbaImage {
+    let (nw, nh) = fitted(im.width(), im.height(), side);
+    let s = imageops::resize(im, nw, nh, imageops::FilterType::Triangle);
+    let mut c = RgbaImage::new(side, side);
+    imageops::overlay(&mut c, &s, ((side - nw) / 2) as i64, ((side - nh) / 2) as i64);
+    c
+}
+
+fn fitted(w: u32, h: u32, side: u32) -> (u32, u32) {
+    let f = side as f32 / w.max(h) as f32;
+    (((w as f32 * f).round() as u32).clamp(1, side), ((h as f32 * f).round() as u32).clamp(1, side))
+}
+
+/// Region edit blends the redrawn image in through a soft mask, so everything outside the area keeps its exact pixels.
+fn picture_edit(c: &mut Ctx, r: &Value, mode: &str, text: &str, source: &Path, src: &RgbaImage) -> Result<String> {
+    let prompt = r["prompt"].as_str().unwrap_or("").trim().to_string();
+    let side = PICTURE_SIDE;
+    let (soft, repaint) = if mode == "regions" {
+        let n = PICTURE_MASK;
+        let bits = r["mask"].as_str().unwrap_or("").as_bytes();
+        if bits.len() != (n * n) as usize {
+            bail!(tr!("Pinta la zona editable antes de generar.", "Paint the editable area before generating."));
+        }
+        let cells = smooth_canvas(src, n);
+        let m = GrayImage::from_fn(n, n, |x, y| Luma([if bits[(y * n + x) as usize] == b'1' && cells.get_pixel(x, y).0[3] > 0 { 255 } else { 0 }]));
+        if m.pixels().all(|p| p.0[0] == 0) {
+            bail!(tr!("Selecciona al menos una celda de la imagen.", "Select at least one cell of the image."));
+        }
+        let soft = imageops::resize(&m, side, side, imageops::FilterType::Triangle);
+        let repaint = GrayImage::from_fn(side, side, |x, y| Luma([if soft.get_pixel(x, y).0[0] > 0 { 255 } else { 0 }]));
+        (soft, Some(repaint))
+    } else {
+        (GrayImage::from_pixel(side, side, Luma([255])), None)
+    };
+    let seed = pick_seed(&r["seed"]);
+    let count = r["variants"].as_u64().unwrap_or(1).clamp(1, 9) as usize;
+    let strength = r["strength"].as_f64().unwrap_or(0.8) as f32;
+    let req = adapt(
+        c,
+        &Request {
+            prompt: text.to_string(),
+            negative: String::new(),
+            width: side as usize,
+            height: side as usize,
+            steps: r["steps"].as_u64().unwrap_or(25) as usize,
+            guidance: r["guidance"].as_f64().unwrap_or(3.0) as f32,
+            seed,
+            count,
+            init: Some(smooth_canvas(src, side)),
+            mask: repaint,
+            strength,
+            preview_every: 1,
+            opaque: true,
+        },
+    );
+    let (w, h) = src.dimensions();
+    let (nw, nh) = fitted(w, h, side);
+    let (ox, oy) = ((side - nw) / 2, (side - nh) / 2);
+    let to_source = |im: &RgbaImage| imageops::resize(&imageops::crop_imm(im, ox, oy, nw, nh).to_image(), w, h, imageops::FilterType::Lanczos3);
+    let alpha = imageops::resize(&imageops::crop_imm(&soft, ox, oy, nw, nh).to_image(), w, h, imageops::FilterType::Triangle);
+    let started = Instant::now();
+    let mut saved = 0;
+    let src_s = source.canonicalize().unwrap_or(source.to_path_buf()).to_string_lossy().replace("\\\\?\\", "");
+    let stopped = run_engine_with(c, &req, false, |c, i, raw| {
+        let generated = to_source(&raw);
+        let out = RgbaImage::from_fn(w, h, |x, y| {
+            let (o, g, a) = (src.get_pixel(x, y).0, generated.get_pixel(x, y).0, alpha.get_pixel(x, y).0[0] as u32);
+            let mix = |k: usize| ((o[k] as u32 * (255 - a) + g[k] as u32 * a) / 255) as u8;
+            image::Rgba([mix(0), mix(1), mix(2), o[3]])
+        });
+        let mut st = json!({"mode": mode, "pixel": false, "original": true, "prompt": prompt, "source": src_s, "strength": strength,
+            "guidance": req.guidance, "steps": req.steps, "seed": seed + i as u64, "variant": i + 1, "variants": count, "full_prompt": req.prompt,
+            "width": w, "height": h, "seconds": (started.elapsed().as_secs_f64() * 10.0).round() / 10.0});
+        if mode == "regions" {
+            st["mask"] = r["mask"].clone();
+        }
+        if mode == "angle" {
+            st["pitch"] = r["pitch"].clone();
+            st["yaw"] = r["yaw"].clone();
+        }
+        save(c, mode, seed + i as u64, &out, st)?;
+        saved += 1;
+        Ok(())
+    })?;
+    Ok(format!(
+        "{}{saved}/{count} {} · {w} × {h} · {:.1} s",
+        if stopped { tr!("Detenido · ", "Stopped · ") } else { "" },
+        tr!("variantes", "variants"),
+        started.elapsed().as_secs_f64()
+    ))
 }
 
 fn image_mode(c: &mut Ctx, r: &Value, mode: &str) -> Result<String> {
@@ -991,31 +1147,39 @@ fn image_mode(c: &mut Ctx, r: &Value, mode: &str) -> Result<String> {
         camera = format!("gizmo {}°/{}°", pitch.round(), yaw.round());
         full = format!("{prompt} {}", angle_text(pitch, yaw));
     }
-    let out = if mode == "regions" { 32 } else { r["out_size"].as_u64().unwrap_or(32) as usize };
+    let src = image::open(&source)?.to_rgba8();
+    if src.width() > 2048 || src.height() > 2048 {
+        bail!(tr!("Usa una imagen de hasta 2048 × 2048 píxeles.", "Use an image of at most 2048 × 2048 pixels."));
+    }
+    // out_size 0 = "Original"
+    let keep_size = mode == "regions" || r["out_size"].as_u64() == Some(0);
+    if keep_size && is_picture(src.width(), src.height()) {
+        let text = if mode == "angle" { full.clone() } else { prompt.clone() };
+        return picture_edit(c, r, mode, &text, &source, &src);
+    }
+    let out = if keep_size { src.width().max(src.height()) as usize } else { r["out_size"].as_u64().unwrap_or(32) as usize };
     let s = c.meta.scale as usize;
     let key = c.meta.background == Some([255, 0, 255]);
-    let side = s * out;
+    let side = regions_side(s, out);
+    let k = side / out;
     let seed = pick_seed(&r["seed"]);
     let count = r["variants"].as_u64().unwrap_or(1).clamp(1, 9) as usize;
     let strength = r["strength"].as_f64().unwrap_or(0.45) as f32;
     let guidance = r["guidance"].as_f64().unwrap_or(3.0) as f32;
     let steps = r["steps"].as_u64().unwrap_or(25) as usize;
-    let src = image::open(&source)?.to_rgba8();
-    if src.width() > 2048 || src.height() > 2048 {
-        bail!(tr!("Usa una imagen de hasta 2048 × 2048 píxeles.", "Use an image of at most 2048 × 2048 pixels."));
-    }
     let canvas = sprite::fit_canvas(&src, side as u32);
-    let original = imageops::resize(&canvas, 32, 32, imageops::FilterType::Nearest);
+    let original = imageops::resize(&canvas, out as u32, out as u32, imageops::FilterType::Nearest);
     let canvas = if mode == "angle" && r["warp"].as_bool().unwrap_or(true) { sprite::warp_to_angle(&canvas, pitch, yaw) } else { canvas };
     let mut mask_img = None;
     let mut mask32 = None;
     if mode == "regions" {
         let bits = r["mask"].as_str().unwrap_or("");
-        if bits.len() != 1024 {
+        if bits.len() != out * out {
             bail!(tr!("Pinta la zona editable antes de generar.", "Paint the editable area before generating."));
         }
-        let m = GrayImage::from_fn(32, 32, |x, y| {
-            let on = bits.as_bytes()[(y * 32 + x) as usize] == b'1' && original.get_pixel(x, y).0[3] > 0;
+        let n = out as u32;
+        let m = GrayImage::from_fn(n, n, |x, y| {
+            let on = bits.as_bytes()[(y * n + x) as usize] == b'1' && original.get_pixel(x, y).0[3] > 0;
             Luma([if on { 255 } else { 0 }])
         });
         if m.pixels().all(|p| p.0[0] == 0) {
@@ -1063,26 +1227,32 @@ fn image_mode(c: &mut Ctx, r: &Value, mode: &str) -> Result<String> {
     let stopped = run_engine(c, &req, |c, i, raw| {
         let tile = if let Some(m) = &mask32 {
             let orig = &original;
-            let generated = imageops::resize(&raw, 32, 32, imageops::FilterType::Nearest);
-            RgbaImage::from_fn(32, 32, |x, y| {
+            let n = out as u32;
+            let generated = imageops::resize(&raw, n, n, imageops::FilterType::Nearest);
+            RgbaImage::from_fn(n, n, |x, y| {
                 if m.get_pixel(x, y).0[0] > 127 {
+                    // the version's flat background drawn inside the area is the object being cut there
                     let mut p = *generated.get_pixel(x, y);
-                    p.0[3] = orig.get_pixel(x, y).0[3];
+                    p.0[3] = if key && sprite::is_magentaish(&p) { 0 } else { orig.get_pixel(x, y).0[3] };
                     p
                 } else {
                     *orig.get_pixel(x, y)
                 }
             })
+        } else if plain {
+            sprite::fit(&raw, out as u32)
         } else {
-            if plain {
-                sprite::fit(&raw, out as u32)
-            } else {
-                sprite::fit(&sprite::despeckle(&depix(key, &sprite::desaturate(&raw, 0.85), sprite::COLORS, s)), out as u32)
-            }
+            sprite::fit(&sprite::despeckle(&depix(key, &sprite::desaturate(&raw, 0.85), sprite::COLORS, k)), out as u32)
+        };
+        let tile = if keep_size {
+            let (w, h) = src.dimensions();
+            imageops::crop_imm(&tile, (out as u32 - w) / 2, (out as u32 - h) / 2, w, h).to_image()
+        } else {
+            tile
         };
         let mut st = json!({"mode": mode, "prompt": prompt, "camera": camera, "source": src_s, "strength": strength, "guidance": req.guidance,
-            "steps": req.steps, "seed": seed + i as u64, "variant": i + 1, "variants": count, "out_size": out, "full_prompt": req.prompt,
-            "seconds": (started.elapsed().as_secs_f64() * 10.0).round() / 10.0});
+            "steps": req.steps, "seed": seed + i as u64, "variant": i + 1, "variants": count, "out_size": out, "original": keep_size,
+            "full_prompt": req.prompt, "seconds": (started.elapsed().as_secs_f64() * 10.0).round() / 10.0});
         if mode == "regions" {
             st["mask"] = r["mask"].clone();
         }
@@ -1158,6 +1328,17 @@ mod grid_tests {
 #[cfg(test)]
 mod template_tests {
     use super::*;
+
+    #[test]
+    fn region_canvases_fit_the_model() {
+        assert_eq!(regions_side(8, 32), 256);
+        assert_eq!(regions_side(16, 32), 512);
+        assert_eq!(regions_side(8, 96), 768);
+        assert_eq!(regions_side(16, 96), 1536);
+        assert_eq!(regions_side(8, 16), 256);
+        assert_eq!(regions_side(16, 256), 1536);
+        assert_eq!(regions_side(8, 50), 400);
+    }
 
     #[test]
     fn the_default_template_is_the_built_in_prompt() {

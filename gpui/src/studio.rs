@@ -232,6 +232,9 @@ const SINGLE_SIZES: [(&str, u32, u32); 9] = [
     ("64×128", 64, 128),
     ("96×144", 96, 144),
 ];
+const PICTURE_SIZES: [(&str, u32, u32); 5] = [("512", 512, 512), ("768", 768, 768), ("1024", 1024, 1024), ("1024×768", 1024, 768), ("768×1024", 768, 1024)];
+/// Results bigger than this are regular images: the viewer shows them as a texture instead of one quad per pixel.
+const SMOOTH_ABOVE: u32 = 256;
 const PACKS: [(&str, u32, u32); 5] = [("3×3 · 32", 3, 32), ("2×2 · 48", 2, 48), ("2×2 · 64", 2, 64), ("3×3 · 48", 3, 48), ("3×3 · 64", 3, 64)];
 const OUT_SIZES: [u32; 3] = [32, 64, 96];
 const DIRECT_SIZES: [u32; 5] = [32, 48, 64, 96, 128];
@@ -266,6 +269,8 @@ struct Form {
     kind: usize,   // Personaje with a LoRA walk format: which of its kinds
     room: bool,    // Muros: also assemble the 3x3 closed room
     restyle: bool, // Imagen entera: then redraw with the LoRA (img2sprite)
+    pixel: bool,   // Sprite: off = a regular image, no LoRA
+    picture_size: usize,
 }
 
 struct Source {
@@ -273,7 +278,7 @@ struct Source {
     view: Arc<RenderImage>,
     w: u32,
     h: u32,
-    sprite: Option<RgbaImage>, // the 32x32 the region mask paints on (from the backend, exactly as it samples)
+    sprite: Option<RgbaImage>, // what the region mask paints on (from the backend, as it samples)
 }
 
 #[derive(Clone)]
@@ -588,6 +593,8 @@ impl Studio {
                     kind: 0,
                     room: true,
                     restyle: true,
+                    pixel: true,
+                    picture_size: 2,
                 }
             })
             .collect();
@@ -766,6 +773,18 @@ impl Studio {
 
     fn size_ok(&self, w: u32, h: u32) -> bool {
         self.family_info().is_none_or(|f| f.sizes.is_empty() || (w == h && f.sizes.contains(&w)))
+    }
+
+    fn picture_source(&self) -> bool {
+        self.source.as_ref().is_some_and(|s| crate::jobs::is_picture(s.w, s.h))
+    }
+
+    fn mask_n(&self) -> i32 {
+        match &self.source {
+            Some(s) if crate::jobs::is_picture(s.w, s.h) => crate::jobs::PICTURE_MASK as i32,
+            Some(s) => s.w.max(s.h) as i32,
+            None => 32,
+        }
     }
 
     fn plain_family(&self) -> bool {
@@ -1145,7 +1164,9 @@ impl Studio {
         self.big = item.map(|i| Arc::new(i.sprite.clone()));
         self.small = item.map(|i| {
             let (w, h) = i.sprite.dimensions();
-            (pixels::render(&i.sprite, 1), pixels::render(&i.sprite, 2), w, h)
+            let one = pixels::render(&i.sprite, 1);
+            let two = if w.max(h) > SMOOTH_ABOVE { one.clone() } else { pixels::render(&i.sprite, 2) };
+            (one, two, w, h)
         });
         self.selected = png;
     }
@@ -1290,9 +1311,16 @@ impl Studio {
                 }
             }
         };
+        let picture = (mode == Mode::Single && !f.pixel && !self.plain_family()) || (mode == Mode::Regions && self.picture_source());
         let mut req = json!({"cmd": "generate", "mode": mode.key(), "prompt": prompt, "seed": seed, "steps": self.steps_of(f),
-                             "camera": CAMERAS[f.camera].1, "lora_scale": self.lora_scale, "template": template});
+                             "camera": CAMERAS[f.camera].1, "lora_scale": if picture { 0. } else { self.lora_scale }, "template": template});
         match mode {
+            Mode::Single if picture => {
+                let (_, w, h) = PICTURE_SIZES[f.picture_size.min(PICTURE_SIZES.len() - 1)];
+                req["pixel"] = false.into();
+                req["width"] = w.into();
+                req["height"] = h.into();
+            }
             Mode::Single => {
                 let (_, mut w, mut h) = SINGLE_SIZES[f.size];
                 if !self.size_ok(w, h) {
@@ -1370,7 +1398,7 @@ impl Studio {
                     self.trash.push(old.view);
                 }
                 self.source = Some(Source { path: path.clone(), view, w, h, sprite: None });
-                self.mask = vec![false; 1024];
+                self.mask = vec![false; (self.mask_n() * self.mask_n()) as usize];
                 self.send(json!({"cmd": "prepare", "path": path.to_string_lossy()}));
             }
             None => self.say(tr!(format!("No se pudo abrir {}", path.display()), format!("Could not open {}", path.display())), Level::Error),
@@ -1437,7 +1465,12 @@ impl Studio {
         match mode {
             Mode::Single => {
                 let (w, h) = (j["width"].as_u64().unwrap_or(32) as u32, j["height"].as_u64().unwrap_or(32) as u32);
-                f.size = SINGLE_SIZES.iter().position(|x| x.1 == w && x.2 == h).unwrap_or(1);
+                f.pixel = j["pixel"].as_bool().unwrap_or(true);
+                if f.pixel {
+                    f.size = SINGLE_SIZES.iter().position(|x| x.1 == w && x.2 == h).unwrap_or(1);
+                } else {
+                    f.picture_size = PICTURE_SIZES.iter().position(|x| x.1 == w && x.2 == h).unwrap_or(2);
+                }
             }
             Mode::Pack => {
                 let (k, c) = (j["grid"].as_u64().unwrap_or(3) as u32, j["cell"].as_u64().unwrap_or(32) as u32);
@@ -1463,7 +1496,7 @@ impl Studio {
             let src = PathBuf::from(s("source"));
             if src.is_file() {
                 self.set_source(src, cx);
-                if let Some(m) = j["mask"].as_str().filter(|m| m.len() == 1024) {
+                if let Some(m) = j["mask"].as_str().filter(|m| m.len() == self.mask.len()) {
                     self.mask = m.chars().map(|c| c == '1').collect();
                 }
             } else {
@@ -1900,18 +1933,19 @@ impl Studio {
     // ------------------------------------------------------------ region mask
     fn cell_at(&self, pos: Point<Pixels>) -> Option<(i32, i32)> {
         let b = self.grid.get()?;
-        let cw = b.size.width / 32.;
+        let n = self.mask_n();
+        let cw = b.size.width / n as f32;
         let x = ((pos.x - b.origin.x) / cw).floor() as i32;
         let y = ((pos.y - b.origin.y) / cw).floor() as i32;
-        ((0..32).contains(&x) && (0..32).contains(&y)).then_some((x, y))
+        ((0..n).contains(&x) && (0..n).contains(&y)).then_some((x, y))
     }
     fn paint_cell(&mut self, x: i32, y: i32, on: bool) {
-        let r = self.brush - 1;
+        let (r, n) = (self.brush - 1, self.mask_n());
         for dy in -r..=r {
             for dx in -r..=r {
                 let (cx, cy) = (x + dx, y + dy);
-                if (0..32).contains(&cx) && (0..32).contains(&cy) {
-                    self.mask[(cy * 32 + cx) as usize] = on;
+                if (0..n).contains(&cx) && (0..n).contains(&cy) {
+                    self.mask[(cy * n + cx) as usize] = on;
                 }
             }
         }
@@ -2901,6 +2935,8 @@ impl Studio {
         let mask = self.mask.clone();
         let gb = self.grid.clone();
         let count = mask.iter().filter(|&&b| b).count();
+        let n = sprite.width() as usize;
+        let picture = self.picture_source().then(|| self.source.as_ref().map(|s| s.view.clone())).flatten();
         let tools = [(Tool::Brush, tr!("Pincel", "Brush")), (Tool::Erase, tr!("Goma", "Eraser")), (Tool::Wand, tr!("Color", "Colour"))];
         let grid = div()
             .id("mask")
@@ -2917,28 +2953,36 @@ impl Studio {
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, _, _| this.painting = None))
             .on_mouse_up(MouseButton::Right, cx.listener(|this, _: &MouseUpEvent, _, _| this.painting = None))
             .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, _, _| this.painting = None))
+            .relative()
+            .child(canvas(|_, _, _| (), |b, _, window, _| paint_checker(b, f32::from(b.size.width) / 16., window)).absolute().size_full())
+            .children(picture.clone().map(|v| img(v).absolute().size_full().object_fit(ObjectFit::Contain)))
             .child(
                 canvas(
                     move |b, _, _| gb.set(Some(b)),
                     move |b, _, window, _| {
-                        paint_checker(b, f32::from(b.size.width) / 16., window);
-                        let c = b.size.width / 32.;
+                        let c = b.size.width / n as f32;
                         for (i, p) in sprite.pixels().enumerate() {
-                            let (x, y) = ((i % 32) as f32, (i / 32) as f32);
+                            let (x, y) = ((i % n) as f32, (i / n) as f32);
                             let o = point(b.origin.x + c * x, b.origin.y + c * y);
                             let p = p.0;
-                            if p[3] > 0 {
+                            if picture.is_none() && p[3] > 0 {
                                 let col = gpui::Rgba { r: p[0] as f32 / 255., g: p[1] as f32 / 255., b: p[2] as f32 / 255., a: p[3] as f32 / 255. };
                                 window.paint_quad(fill(Bounds::new(o, size(c, c)), col));
                             }
                             if mask[i] {
-                                window.paint_quad(fill(Bounds::new(o, size(c, c)), rgba(0xeee2cb48)).border_widths(px(1.)).border_color(rgba(0xf7eedccc)));
+                                if picture.is_some() {
+                                    window.paint_quad(fill(Bounds::new(o, size(c, c)), rgba(0xeee2cb70)));
+                                } else {
+                                    window.paint_quad(fill(Bounds::new(o, size(c, c)), rgba(0xeee2cb48)).border_widths(px(1.)).border_color(rgba(0xf7eedccc)));
+                                }
                             }
                         }
                     },
                 )
+                .absolute()
                 .size_full(),
             );
+        let cells = self.picture_source();
         div()
             .flex()
             .flex_col()
@@ -2969,13 +3013,11 @@ impl Studio {
                     .flex()
                     .items_center()
                     .gap(px(6.))
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_size(px(11.))
-                            .text_color(rgb(MUTED()))
-                            .child(tr!(format!("{count} píxeles editables · clic derecho borra"), format!("{count} editable pixels · right click erases"))),
-                    )
+                    .child(div().flex_1().text_size(px(11.)).text_color(rgb(MUTED())).child(if cells {
+                        tr!(format!("{count} celdas editables · clic derecho borra"), format!("{count} editable cells · right click erases"))
+                    } else {
+                        tr!(format!("{count} píxeles editables · clic derecho borra"), format!("{count} editable pixels · right click erases"))
+                    }))
                     .child(button("m-all", tr!("Todo", "All")).on_click(cx.listener(|this, _, _, cx| {
                         if let Some(sp) = this.source.as_ref().and_then(|s| s.sprite.as_ref()) {
                             this.mask = sp.pixels().map(|p| p.0[3] > 0).collect();
@@ -2989,7 +3031,7 @@ impl Studio {
                         cx.notify();
                     })))
                     .child(button("m-none", tr!("Nada", "None")).on_click(cx.listener(|this, _, _, cx| {
-                        this.mask = vec![false; 1024];
+                        this.mask = vec![false; (this.mask_n() * this.mask_n()) as usize];
                         cx.notify();
                     }))),
             )
@@ -3323,7 +3365,9 @@ impl Studio {
         let lora_scale = self.lora_scale;
         let has_lora = !self.model.lora.is_empty();
         let plain = self.plain_family();
-        let templated = !plain && matches!(mode, Mode::Single | Mode::Pack | Mode::Variants | Mode::Regions | Mode::Angle);
+        let picture = (mode == Mode::Single && !plain && !f.pixel) || (mode == Mode::Regions && self.picture_source());
+        let (pixel, picture_size) = (f.pixel, f.picture_size);
+        let templated = !plain && !picture && matches!(mode, Mode::Single | Mode::Pack | Mode::Variants | Mode::Regions | Mode::Angle);
         let custom = self.template.read(cx).text().trim() != crate::jobs::TEMPLATE;
         let mut col = div()
             .flex()
@@ -3446,8 +3490,28 @@ impl Studio {
             Mode::Variants | Mode::Angle => OUT_SIZES.iter().enumerate().filter(|(_, s)| self.size_ok(**s, **s)).map(|(i, s)| (i, format!("{s}"))).collect(),
             _ => vec![],
         };
+        if mode == Mode::Single && !plain {
+            col = col.child(div().pt(px(8.)).child(
+                toggle("pixel", "Pixel art", tr!("Apagado: imagen normal, sin LoRA", "Off: a regular image, no LoRA"), pixel).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        let f = this.form_mut();
+                        f.pixel = !f.pixel;
+                        cx.notify();
+                    },
+                )),
+            ));
+        }
         let own_sizes = self.family_info().is_some_and(|f| !f.sizes.is_empty());
-        if !sizes.is_empty() {
+        if picture && mode == Mode::Single {
+            col = col.child(section(tr!("Formato", "Format"))).child(div().flex().flex_wrap().gap(px(6.)).children(PICTURE_SIZES.iter().enumerate().map(
+                |(i, s)| {
+                    chip(("psize", i), s.0, picture_size == i).on_click(cx.listener(move |this, _, _, cx| {
+                        this.form_mut().picture_size = i;
+                        cx.notify();
+                    }))
+                },
+            )));
+        } else if !sizes.is_empty() {
             let experimental = |i: usize| !own_sizes && mode == Mode::Single && SINGLE_SIZES[i].1.max(SINGLE_SIZES[i].2) > 32;
             col = col.child(section(tr!("Formato", "Format"))).child(div().flex().flex_wrap().gap(px(6.)).children(sizes.into_iter().map(|(i, s)| {
                 chip(("size", i), &s, size_ix == i)
@@ -3461,7 +3525,7 @@ impl Studio {
         if mode == Mode::Angle {
             col = col.child(section(tr!("Ángulo", "Angle"))).child(self.gizmo_panel(cx));
         }
-        if !plain && !matches!(mode, Mode::Photo | Mode::Angle | Mode::Creature | Mode::Walls) {
+        if !plain && !picture && !matches!(mode, Mode::Photo | Mode::Angle | Mode::Creature | Mode::Walls) {
             col = col.child(div().pt(px(12.)).pb(px(6.)).child(label(tr!("Ángulo de cámara", "Camera angle")))).child(div().flex().gap(px(6.)).children(
                 (0..CAMERAS.len()).map(|i| {
                     chip(("cam", i), camera_label(i), camera == i)
@@ -3473,7 +3537,7 @@ impl Studio {
                 }),
             ));
         }
-        if matches!(mode, Mode::Single | Mode::Pack) {
+        if matches!(mode, Mode::Single | Mode::Pack) && !picture {
             let opaque_ok = self.family_info().is_none_or(|f| f.opaque);
             col = col.child(
                 div()
@@ -3722,6 +3786,7 @@ impl Studio {
                 })
                 .when(!busy, |d| {
                     d.child(match mode {
+                        Mode::Single if picture => tr!("Generar imagen", "Generate image"),
                         Mode::Single => tr!("Generar sprite", "Generate sprite"),
                         Mode::Pack => tr!("Generar pack", "Generate pack"),
                         Mode::Variants => tr!("Generar variantes", "Generate variants"),
@@ -3771,6 +3836,7 @@ impl Studio {
         } else {
             None
         };
+        let smooth = self.small.as_ref().map(|s| s.0.clone());
         let image: Option<Arc<RgbaImage>> = if running {
             None
         } else if self.mode == Mode::Pose {
@@ -3954,6 +4020,21 @@ impl Studio {
                                 .top(px(pan_y))
                                 .size_full()
                                 .child(canvas(|_, _, _| (), move |b, _, window, _| paint_field(b, &tex, window)).size_full()),
+                        )
+                        .into_any_element(),
+                    (Some(im), _) if im.width().max(im.height()) > SMOOTH_ABOVE && smooth.is_some() => div()
+                        .absolute()
+                        .left(gpui::relative((1. - img_frac) / 2.))
+                        .top(gpui::relative((1. - img_frac) / 2.))
+                        .w(gpui::relative(img_frac))
+                        .h(gpui::relative(img_frac))
+                        .child(
+                            div()
+                                .absolute()
+                                .left(px(pan_x))
+                                .top(px(pan_y))
+                                .size_full()
+                                .child(img(smooth.clone().unwrap()).size_full().object_fit(ObjectFit::Contain)),
                         )
                         .into_any_element(),
                     // sized in fractions of the square so it is right on every frame, panned in pixels inside

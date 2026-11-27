@@ -320,7 +320,7 @@ impl Worker {
                 self.state();
             }
             Cmd::Prepare(path) => {
-                match jobs::prepared_sprite(&path, self.meta().scale) {
+                match jobs::prepared_sprite(&path) {
                     Ok(sprite) => self.push(Msg::Prepared { source: path, sprite }),
                     Err(e) => self.event(json!({"ev": "toast", "level": "error", "message": tr!(format!("No se pudo abrir la imagen: {e}"), format!("Could not open the image: {e}"))})),
                 }
