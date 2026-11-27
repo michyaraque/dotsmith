@@ -575,7 +575,10 @@ impl Studio {
         let files: Vec<(String, String)> =
             self.model.files.iter().flat_map(|f| &f.1).filter_map(|r| r.remote.as_ref().map(|x| (x.repo.clone(), x.path.clone()))).collect();
         let state = self.token_check.clone();
-        *state.lock().unwrap() = (state.lock().unwrap().0 + 1, Some(TokenCheck::Running));
+        {
+            let mut s = state.lock().unwrap();
+            *s = (s.0 + 1, Some(TokenCheck::Running));
+        }
         std::thread::spawn(move || {
             let report = crate::hf::check_token(token.as_deref(), &files);
             let mut s = state.lock().unwrap();
