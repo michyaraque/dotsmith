@@ -467,6 +467,8 @@ pub struct Studio {
     token_seen: u64,
     model_open: bool,
     prompt_modal: bool,
+    template: Entity<TextInput>,
+    template_open: bool,
     small: Option<(Arc<RenderImage>, Arc<RenderImage>, u32, u32)>, // sprite at 1x and 2x real pixels
     zoom: f32,
     pan: Point<Pixels>,
@@ -594,6 +596,12 @@ impl Studio {
                 std::env::args().skip_while(|a| a != "--mode").nth(1).or(settings.last_mode.clone()).and_then(|k| Mode::from_key(&k)).unwrap_or(Mode::Single);
             forms[start_mode as usize].prompt.update(cx, |t, cx| t.set_text(&text, cx));
         }
+        let template_text = settings.prompt_template.clone().unwrap_or_else(|| crate::jobs::TEMPLATE.to_string());
+        let template = cx.new(|cx| {
+            let mut t = TextInput::new(cx, crate::jobs::TEMPLATE, 4).mono().with_max_lines(10);
+            t.set_text(&template_text, cx);
+            t
+        });
         let (backend, status) = match Backend::start(folders(&settings)) {
             Ok(b) => (Some(b), None),
             Err(e) => (None, Some((e, Level::Error, Instant::now()))),
@@ -678,6 +686,8 @@ impl Studio {
             status,
             model_open: std::env::args().any(|a| a == "--open-model"), // --open-model: isolated screenshots of the selector
             prompt_modal: false,
+            template,
+            template_open: false,
             small: None,
             zoom: 1.0,
             pan: Point::default(),
@@ -1258,6 +1268,12 @@ impl Studio {
             cx.notify();
             return;
         }
+        let template = self.template.read(cx).text().trim().to_string();
+        let saved_template = (!template.is_empty() && template != crate::jobs::TEMPLATE).then(|| template.clone());
+        if self.settings.prompt_template != saved_template {
+            self.settings.prompt_template = saved_template;
+            let _ = self.settings.save();
+        }
         let mode = self.mode;
         let f = self.form();
         let prompt = f.prompt.read(cx).text().trim().to_string();
@@ -1275,7 +1291,7 @@ impl Studio {
             }
         };
         let mut req = json!({"cmd": "generate", "mode": mode.key(), "prompt": prompt, "seed": seed, "steps": self.steps_of(f),
-                             "camera": CAMERAS[f.camera].1, "lora_scale": self.lora_scale});
+                             "camera": CAMERAS[f.camera].1, "lora_scale": self.lora_scale, "template": template});
         match mode {
             Mode::Single => {
                 let (_, mut w, mut h) = SINGLE_SIZES[f.size];
@@ -1658,6 +1674,135 @@ impl Studio {
             .size_full()
             .key_context("PromptModal")
             .on_action(cx.listener(Self::close_prompt_modal))
+            .child(layer)
+            .into_any_element()
+    }
+
+    fn open_template_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.template_open = true;
+        window.focus(&self.template.read(cx).focus_handle.clone());
+        cx.notify();
+    }
+
+    fn close_template_modal(&mut self, _: &ClosePromptModal, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.template_open {
+            return;
+        }
+        self.template_open = false;
+        let t = self.template.read(cx).text().trim().to_string();
+        let saved = (!t.is_empty() && t != crate::jobs::TEMPLATE).then_some(t);
+        if self.settings.prompt_template != saved {
+            self.settings.prompt_template = saved;
+            let _ = self.settings.save();
+        }
+        window.focus(&self.form().prompt.read(cx).focus_handle.clone());
+        cx.notify();
+    }
+
+    fn template_modal_view(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let custom = self.template.read(cx).text().trim() != crate::jobs::TEMPLATE;
+        let fields: [(&str, &str); 5] = [
+            ("{prompt}", tr!("Tu descripción", "Your description")),
+            ("{style}", tr!("Palabra clave del LoRA + «pixel art»", "The LoRA's trigger word + “pixel art”")),
+            ("{layout}", tr!("Objeto único o pack 2×2 / 3×3", "Single item or 2×2 / 3×3 pack")),
+            ("{background}", tr!("Fondo transparente u opaco", "Transparent or opaque background")),
+            ("{width} {height}", tr!("Tamaño de la imagen en px", "Image size in px")),
+        ];
+        let card = div()
+            .id("template-card")
+            .occlude()
+            .w(px(640.))
+            .max_w_full()
+            .rounded(px(14.))
+            .bg(rgb(PANEL()))
+            .border_1()
+            .border_color(rgb(BORDER()))
+            .shadow_lg()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .flex()
+                    .items_start()
+                    .gap(px(10.))
+                    .px(px(20.))
+                    .pt(px(16.))
+                    .pb(px(12.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .gap(px(3.))
+                            .child(
+                                div()
+                                    .text_size(px(15.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(rgb(TEXT()))
+                                    .child(tr!("Plantilla del prompt", "Prompt template")),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(rgb(MUTED()))
+                                    .child(tr!("Sprite, Pack, Variantes, Zonas y Ángulo", "Sprite, Pack, Variants, Regions and Angle")),
+                            ),
+                    )
+                    .child(icon_btn("template-close", "x").on_click(cx.listener(|this, _, w, cx| this.close_template_modal(&ClosePromptModal, w, cx)))),
+            )
+            .child(div().px(px(20.)).child(self.template.clone()))
+            .child(div().px(px(20.)).pt(px(14.)).child(section(tr!("Campos", "Fields"))).child(div().flex().flex_col().gap(px(6.)).pt(px(4.)).children(
+                fields.into_iter().map(|(k, v)| {
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(12.))
+                        .child(div().w(px(130.)).flex_none().font_family(MONO).text_size(px(12.)).text_color(rgb(ACCENT())).child(k))
+                        .child(div().text_size(px(12.)).text_color(rgb(MUTED())).child(v))
+                }),
+            )))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .px(px(20.))
+                    .py(px(16.))
+                    .when(custom, |d| {
+                        d.child(button("template-reset", tr!("Restaurar predeterminada", "Restore default")).on_click(cx.listener(|this, _, _, cx| {
+                            this.template.update(cx, |t, cx| t.set_text(crate::jobs::TEMPLATE, cx));
+                            cx.notify();
+                        })))
+                    })
+                    .child(div().flex_1())
+                    .child(kbd("Esc"))
+                    .child(div().text_size(px(11.)).text_color(rgb(MUTED_2())).mr(px(8.)).child(tr!("cerrar", "close")))
+                    .child(
+                        div()
+                            .kb("template-done")
+                            .px(px(16.))
+                            .h(px(32.))
+                            .rounded(px(8.))
+                            .bg(rgb(ACCENT()))
+                            .flex()
+                            .items_center()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(ACCENT_INK()))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(rgb(ACCENT_HOVER())))
+                            .child(tr!("Listo", "Done"))
+                            .on_click(cx.listener(|this, _, w, cx| this.close_template_modal(&ClosePromptModal, w, cx))),
+                    ),
+            );
+        let layer = self.modal_layer("template-veil", card, |s, w, cx| s.close_template_modal(&ClosePromptModal, w, cx), cx);
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .key_context("PromptModal")
+            .on_action(cx.listener(Self::close_template_modal))
             .child(layer)
             .into_any_element()
     }
@@ -3177,6 +3322,9 @@ impl Studio {
         let turbo = self.model.turbo;
         let lora_scale = self.lora_scale;
         let has_lora = !self.model.lora.is_empty();
+        let plain = self.plain_family();
+        let templated = !plain && matches!(mode, Mode::Single | Mode::Pack | Mode::Variants | Mode::Regions | Mode::Angle);
+        let custom = self.template.read(cx).text().trim() != crate::jobs::TEMPLATE;
         let mut col = div()
             .flex()
             .flex_col()
@@ -3246,6 +3394,30 @@ impl Studio {
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .on_click(cx.listener(|this, _, w, cx| this.open_prompt_modal(w, cx))),
                 )
+                .when(templated, |d| {
+                    d.child(
+                        div()
+                            .kb("template")
+                            .absolute()
+                            .top(px(33.))
+                            .right(px(5.))
+                            .w(px(24.))
+                            .h(px(24.))
+                            .rounded(px(6.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .bg(rgb(PANEL()))
+                            .border_1()
+                            .border_color(rgb(BORDER_SOFT()))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(rgb(HOVER())))
+                            .tooltip(tooltip(tr!("Plantilla del prompt", "Prompt template")))
+                            .child(icon("file-text").size(px(13.)).text_color(rgb(if custom { ACCENT() } else { MUTED() })))
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .on_click(cx.listener(|this, _, w, cx| this.open_template_modal(w, cx))),
+                    )
+                })
                 .into_any_element()
         };
         col = col.child(section(if mode == Mode::Pack { tr!("Dirección del pack", "Pack direction") } else { tr!("Descripción", "Description") })).child(field);
@@ -3275,7 +3447,6 @@ impl Studio {
             _ => vec![],
         };
         let own_sizes = self.family_info().is_some_and(|f| !f.sizes.is_empty());
-        let plain = self.plain_family();
         if !sizes.is_empty() {
             let experimental = |i: usize| !own_sizes && mode == Mode::Single && SINGLE_SIZES[i].1.max(SINGLE_SIZES[i].2) > 32;
             col = col.child(section(tr!("Formato", "Format"))).child(div().flex().flex_wrap().gap(px(6.)).children(sizes.into_iter().map(|(i, s)| {
@@ -4480,6 +4651,7 @@ impl Render for Studio {
         let popover = self.model_open.then(|| self.model_picker(cx));
         let menu = self.menu_open.then(|| self.menu_dropdown(cx));
         let prompt_modal = self.prompt_modal.then(|| self.prompt_modal_view(cx));
+        let template_modal = self.template_open.then(|| self.template_modal_view(cx));
         let settings = self.settings_open.then(|| self.settings_view(cx));
         let palette = self.palette_open.then(|| self.palette_view(cx));
         let alert = self.alert.is_some().then(|| self.alert_view(cx));
@@ -4490,8 +4662,14 @@ impl Render for Studio {
         let err = self.error_detail();
         let welcome = self.welcome_visible();
         // the modals above are built; the background below loses its tab stops while one is open
-        let modal =
-            self.model_open || self.prompt_modal || self.settings_open || self.palette_open || self.hub_open || self.ctx_menu.is_some() || self.alert.is_some();
+        let modal = self.model_open
+            || self.prompt_modal
+            || self.template_open
+            || self.settings_open
+            || self.palette_open
+            || self.hub_open
+            || self.ctx_menu.is_some()
+            || self.alert.is_some();
         TAB_OFF.store(modal, std::sync::atomic::Ordering::Relaxed);
         // the background's text fields leave the tab order too
         for input in [self.form().prompt.clone(), self.form().seed.clone(), self.hist_query.clone()] {
@@ -4562,6 +4740,7 @@ impl Render for Studio {
             .children(err)
             .children(popover)
             .children(prompt_modal)
+            .children(template_modal)
             .children(menu)
             .children(hub)
             .children(downloads)

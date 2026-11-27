@@ -38,6 +38,8 @@ pub struct Settings {
     pub lora_scale: Option<f32>,
     /// Look for new versions at start and every 12 hours (None = on).
     pub check_updates: Option<bool>,
+    /// What the sprite modes wrap the description in (None = jobs::TEMPLATE).
+    pub prompt_template: Option<String>,
 }
 
 pub fn config_dir() -> Option<PathBuf> {

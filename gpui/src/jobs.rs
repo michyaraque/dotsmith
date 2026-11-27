@@ -13,6 +13,22 @@ use std::time::Instant;
 
 use crate::tr;
 
+/// What Sprite, Pack and the image modes wrap the description in. `{prompt}` is the description; `{style}` (the
+/// LoRA's trigger + "pixel art"), `{layout}`, `{background}`, `{width}` and `{height}` are filled per mode.
+pub const TEMPLATE: &str = "{style}, modern detailed, {layout} on {background}. {prompt} --w {width} --h {height}";
+
+/// A template without `{prompt}` gets it at the end.
+fn templated(r: &Value, style: &str, layout: &str, background: &str, prompt: &str, w: usize, h: usize) -> String {
+    let t = r["template"].as_str().map(str::trim).filter(|t| !t.is_empty()).unwrap_or(TEMPLATE);
+    let t = if t.contains("{prompt}") { t.to_string() } else { format!("{t} {{prompt}}") };
+    t.replace("{style}", style)
+        .replace("{layout}", layout)
+        .replace("{background}", background)
+        .replace("{width}", &w.to_string())
+        .replace("{height}", &h.to_string())
+        .replace("{prompt}", prompt)
+}
+
 pub const NEG: &str = "smooth gradient, glossy, shiny, airbrushed, 3d render, soft shading, plastic, blurry";
 /// Base model labels the UI offers, from the engine's family registry (never a hardcoded list).
 pub fn bases() -> Vec<String> {
@@ -307,8 +323,7 @@ fn text_mode(c: &mut Ctx, r: &Value, mode: &str) -> Result<String> {
     };
     let bg = if opaque { "a full painted opaque background" } else { "a transparent background" };
     let plain = plain(c);
-    let text =
-        if plain { desc.clone() } else { format!("{}, modern detailed, {lay} on {bg}. {} --w {wpx} --h {hpx}", c.meta.style(), with_camera(&desc, &camera)) };
+    let text = if plain { desc.clone() } else { templated(r, &c.meta.style(), &lay, bg, &with_camera(&desc, &camera), wpx, hpx) };
     let steps = r["steps"].as_u64().unwrap_or(25) as usize;
     let req = Request {
         prompt: text.clone(),
@@ -1024,7 +1039,7 @@ fn image_mode(c: &mut Ctx, r: &Value, mode: &str) -> Result<String> {
     let text = if plain {
         full.clone()
     } else {
-        format!("{}, modern detailed, format single. One fantasy inventory item on a transparent background. {full} --w {side} --h {side}", c.meta.style())
+        templated(r, &c.meta.style(), "format single. One fantasy inventory item", "a transparent background", &full, side, side)
     };
     let req = Request {
         prompt: text.clone(),
@@ -1137,5 +1152,24 @@ mod grid_tests {
             let seq: Vec<RgbaImage> = w.play_order().iter().map(|&i| frames[i].clone()).collect();
             std::fs::write(out.join(format!("{stem}_{d}.gif")), crate::anim::gif(&seq, 6, 4).unwrap()).unwrap();
         }
+    }
+}
+
+#[cfg(test)]
+mod template_tests {
+    use super::*;
+
+    #[test]
+    fn the_default_template_is_the_built_in_prompt() {
+        let t = templated(&json!({}), "pixel art", "format single. One fantasy inventory item", "a transparent background", "A wand.", 512, 512);
+        assert_eq!(t, "pixel art, modern detailed, format single. One fantasy inventory item on a transparent background. A wand. --w 512 --h 512");
+    }
+
+    #[test]
+    fn an_edited_template_keeps_the_description() {
+        let r = json!({"template": "{style}, chunky outlines"});
+        assert_eq!(templated(&r, "pixel art", "l", "b", "A wand.", 64, 64), "pixel art, chunky outlines A wand.");
+        let r = json!({"template": "  "});
+        assert!(templated(&r, "s", "l", "b", "p", 1, 1).starts_with("s, modern detailed"));
     }
 }
