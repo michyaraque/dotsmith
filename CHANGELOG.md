@@ -2,6 +2,20 @@
 
 All notable changes to Dotsmith. The format follows [Keep a Changelog](https://keepachangelog.com) and versions follow [SemVer](https://semver.org).
 
+## [1.4.0] - 2026-11-27
+
+### Added
+- The prompt template that wraps the description in Sprite, Pack, Variants, Regions and Angle can be edited from a button in the description box, with the fields it fills listed and a way to restore the default.
+- Sprite has a Pixel art switch: turned off, it makes a regular image from 512 to 1024 px with the bare base model.
+- Variants and Angle have an Original format that keeps the source's size: a sprite stays pixel for pixel, a regular image is redrawn at full resolution.
+
+### Changed
+- Every tab picks its size with the same Format chips, labelled in px. Variants and Angle go up to 192 px.
+
+### Fixed
+- Region edit keeps the source's size instead of shrinking it to 32 px: sprites and packs are edited at their own pixels, regular images over 256 px get a finer mask over the real image and only the painted area changes.
+- The magenta background some versions draw inside an edited area no longer stays in the sprite.
+
 ## [1.3.1] - 2026-11-27
 
 ### Fixed
