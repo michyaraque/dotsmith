@@ -50,6 +50,8 @@ icons!(
     "circle-check-big",
     "external-link",
     "key-round",
+    "eye",
+    "eye-off",
     "memory-stick",
     "gpu",
     "chevron-right",

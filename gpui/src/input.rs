@@ -115,7 +115,12 @@ pub struct TextInput {
     undo: Vec<(SharedString, Range<usize>)>,
     redo: Vec<(SharedString, Range<usize>)>,
     typing: bool, // the last edit was a typed character: consecutive ones undo as one step (until a space)
+    /// a secret (a token): drawn as one bullet per character, and it cannot be copied while hidden
+    masked: bool,
 }
+
+/// What a masked field draws for each character.
+const BULLET: char = '•';
 
 const LINE_H: f32 = 20.;
 
@@ -141,6 +146,7 @@ impl TextInput {
             undo: vec![],
             redo: vec![],
             typing: false,
+            masked: false,
         }
     }
 
@@ -166,6 +172,36 @@ impl TextInput {
     pub fn mono(mut self) -> Self {
         self.mono = true;
         self
+    }
+
+    /// Hidden by default: one bullet per character (`set_masked` shows it).
+    pub fn masked(mut self) -> Self {
+        self.masked = true;
+        self
+    }
+
+    pub fn is_masked(&self) -> bool {
+        self.masked
+    }
+
+    pub fn set_masked(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.masked = on;
+        cx.notify();
+    }
+
+    /// The text as drawn: the content, or one bullet per character while masked.
+    fn shown(&self) -> SharedString {
+        if self.masked { self.content.chars().map(|_| BULLET).collect::<String>().into() } else { self.content.clone() }
+    }
+
+    /// A content offset as an offset in the drawn text (they differ only while masked).
+    fn view_offset(&self, i: usize) -> usize {
+        if self.masked { self.content[..i.min(self.content.len())].chars().count() * BULLET.len_utf8() } else { i }
+    }
+
+    /// An offset in the drawn text as a content offset.
+    fn content_offset(&self, i: usize) -> usize {
+        if self.masked { self.content.char_indices().nth(i / BULLET.len_utf8()).map_or(self.content.len(), |(b, _)| b) } else { i }
     }
 
     /// No box of its own: for a field that sits inside a search bar.
@@ -339,12 +375,12 @@ impl TextInput {
         }
     }
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.selected_range.is_empty() {
+        if !self.selected_range.is_empty() && !self.masked {
             cx.write_to_clipboard(ClipboardItem::new_string(self.content[self.selected_range.clone()].to_string()));
         }
     }
     fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.selected_range.is_empty() {
+        if !self.selected_range.is_empty() && !self.masked {
             cx.write_to_clipboard(ClipboardItem::new_string(self.content[self.selected_range.clone()].to_string()));
             self.typing = false;
             self.replace_text_in_range(None, "", window, cx)
@@ -398,7 +434,7 @@ impl TextInput {
             return self.content.len();
         }
         match line.closest_index_for_position(local, px(LINE_H)) {
-            Ok(i) | Err(i) => i.min(self.content.len()),
+            Ok(i) | Err(i) => self.content_offset(i).min(self.content.len()),
         }
     }
     fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
@@ -411,7 +447,7 @@ impl TextInput {
     fn vertical(&self, dir: f32) -> usize {
         let cur = self.cursor_offset();
         let Some(line) = self.last_layout.as_ref() else { return cur };
-        let Some(p) = line.position_for_index(cur, px(LINE_H)) else { return cur };
+        let Some(p) = line.position_for_index(self.view_offset(cur), px(LINE_H)) else { return cur };
         let y = p.y + px(LINE_H * dir) + px(LINE_H / 2.);
         if y < px(0.) {
             return 0;
@@ -425,7 +461,7 @@ impl TextInput {
     fn line_edge(&self, end: bool) -> usize {
         let cur = self.cursor_offset();
         let Some(line) = self.last_layout.as_ref() else { return if end { self.content.len() } else { 0 } };
-        let Some(p) = line.position_for_index(cur, px(LINE_H)) else { return cur };
+        let Some(p) = line.position_for_index(self.view_offset(cur), px(LINE_H)) else { return cur };
         self.index_at(point(if end { px(100000.) } else { px(0.) }, p.y + px(LINE_H / 2.)))
     }
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
@@ -583,7 +619,7 @@ impl EntityInputHandler for TextInput {
     fn bounds_for_range(&mut self, range_utf16: Range<usize>, bounds: Bounds<Pixels>, _: &mut Window, _: &mut Context<Self>) -> Option<Bounds<Pixels>> {
         let line = self.last_layout.as_ref()?;
         let range = self.range_from_utf16(&range_utf16);
-        let p = line.position_for_index(range.start, px(LINE_H))?;
+        let p = line.position_for_index(self.view_offset(range.start), px(LINE_H))?;
         Some(Bounds::new(point(bounds.left() + p.x, bounds.top() + p.y), size(px(2.), px(LINE_H))))
     }
     fn character_index_for_point(&mut self, p: Point<Pixels>, _: &mut Window, _: &mut Context<Self>) -> Option<usize> {
@@ -612,12 +648,13 @@ impl IntoElement for TextElement {
 fn shape(input: &TextInput, window: &mut Window, width: Option<Pixels>) -> Option<WrappedLine> {
     let style = window.text_style();
     let (text, color): (SharedString, Hsla) =
-        if input.content.is_empty() { (input.placeholder.clone(), rgb(MUTED_2()).into()) } else { (input.content.clone(), style.color) };
+        if input.content.is_empty() { (input.placeholder.clone(), rgb(MUTED_2()).into()) } else { (input.shown(), style.color) };
     if text.is_empty() {
         return None;
     }
     let run = TextRun { len: text.len(), font: style.font(), color, background_color: None, underline: None, strikethrough: None };
-    let runs = match input.marked_range.as_ref().filter(|_| !input.content.is_empty()) {
+    let marked = input.marked_range.as_ref().map(|m| input.view_offset(m.start)..input.view_offset(m.end));
+    let runs = match marked.as_ref().filter(|_| !input.content.is_empty()) {
         Some(m) => vec![
             TextRun { len: m.start, ..run.clone() },
             TextRun { len: m.end - m.start, underline: Some(UnderlineStyle { color: Some(run.color), thickness: px(1.), wavy: false }), ..run.clone() },
@@ -673,7 +710,7 @@ impl Element for TextElement {
             if input.content.is_empty() {
                 return point(px(0.), px(0.));
             }
-            line.as_ref().and_then(|l| l.position_for_index(i, lh)).unwrap_or(point(px(0.), px(0.)))
+            line.as_ref().and_then(|l| l.position_for_index(input.view_offset(i), lh)).unwrap_or(point(px(0.), px(0.)))
         };
         let r = input.selected_range.clone();
         let mut selection = vec![];
@@ -726,7 +763,11 @@ impl Element for TextElement {
             if input.follow_cursor && input.max_lines > 0 {
                 input.follow_cursor = false;
                 let cur = input.cursor_offset();
-                let y = if input.content.is_empty() { Some(px(0.)) } else { line.as_ref().and_then(|l| l.position_for_index(cur, px(LINE_H))).map(|p| p.y) };
+                let y = if input.content.is_empty() {
+                    Some(px(0.))
+                } else {
+                    line.as_ref().and_then(|l| l.position_for_index(input.view_offset(cur), px(LINE_H))).map(|p| p.y)
+                };
                 let view = input.scroll.bounds();
                 if let Some(y) = y {
                     let top = bounds.top() + y;
