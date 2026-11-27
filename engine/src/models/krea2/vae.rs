@@ -2,6 +2,8 @@
 //! diffusers AutoencoderKLQwenImage on a single frame: every causal 3D conv sees zero padding in front of the one
 //! frame, so it equals a 2D conv with the LAST temporal slice of its kernel; upsample3d skips its time_conv on the
 //! first frame ("Rep"), leaving nearest 2x + conv. bf16 like ai-toolkit's VAE dtype, fp32 channel RMS norm.
+//! Reads diffusers' tensor names, and the original Wan names (ComfyUI's `qwen_image_vae.safetensors`, the same weights
+//! without a license gate) through `open`.
 use crate::core::util::blend;
 use anyhow::Result;
 use candle_core::{DType, Device, Module, Tensor};
@@ -125,9 +127,63 @@ pub struct VaeQi {
     std: Tensor,
 }
 
+/// The checkpoint at `path` with diffusers' tensor names, whichever layout it was saved in.
+fn open(path: &str) -> Result<Weights> {
+    let mut wt = Weights::open(path)?;
+    if wt.has("decoder.conv1.weight") {
+        wt.rename(diffusers_name);
+    }
+    Ok(wt)
+}
+
+/// A Wan / ComfyUI VAE tensor name as diffusers' AutoencoderKLQwenImage calls it.
+fn diffusers_name(name: &str) -> String {
+    let resnet = |rest: &str| -> String {
+        rest.replacen("residual.0.", "norm1.", 1)
+            .replacen("residual.2.", "conv1.", 1)
+            .replacen("residual.3.", "norm2.", 1)
+            .replacen("residual.6.", "conv2.", 1)
+            .replacen("shortcut.", "conv_shortcut.", 1)
+    };
+    let (side, rest) = match name.split_once('.') {
+        Some((s @ ("encoder" | "decoder"), r)) => (s, r),
+        _ => {
+            // the two 1x1 convs around the latent
+            return match name.split_once('.') {
+                Some(("conv1", r)) => format!("quant_conv.{r}"),
+                Some(("conv2", r)) => format!("post_quant_conv.{r}"),
+                _ => name.to_string(),
+            };
+        }
+    };
+    let rest = if let Some(r) = rest.strip_prefix("conv1.") {
+        format!("conv_in.{r}")
+    } else if let Some(r) = rest.strip_prefix("head.0.") {
+        format!("norm_out.{r}")
+    } else if let Some(r) = rest.strip_prefix("head.2.") {
+        format!("conv_out.{r}")
+    } else if let Some(r) = rest.strip_prefix("middle.1.") {
+        format!("mid_block.attentions.0.{r}")
+    } else if let Some(r) = rest.strip_prefix("middle.0.") {
+        format!("mid_block.resnets.0.{}", resnet(r))
+    } else if let Some(r) = rest.strip_prefix("middle.2.") {
+        format!("mid_block.resnets.1.{}", resnet(r))
+    } else if let Some(r) = rest.strip_prefix("downsamples.") {
+        // the encoder keeps one flat list
+        format!("down_blocks.{}", resnet(r))
+    } else if let Some((i, r)) = rest.strip_prefix("upsamples.").and_then(|r| r.split_once('.')) {
+        // the decoder's flat list is 4 stages of 3 resnets + 1 upsampler (none after the last)
+        let i: usize = i.parse().unwrap_or(0);
+        if i % 4 == 3 { format!("up_blocks.{}.upsamplers.0.{r}", i / 4) } else { format!("up_blocks.{}.resnets.{}.{}", i / 4, i % 4, resnet(r)) }
+    } else {
+        rest.to_string()
+    };
+    format!("{side}.{rest}")
+}
+
 impl VaeQi {
     pub fn load(path: &str, dev: &Device) -> Result<Self> {
-        let wt = Weights::open(path)?;
+        let wt = open(path)?;
         wt.prefetch_where(|_| true);
         let d = "decoder";
         let mut ups = vec![];
@@ -275,7 +331,7 @@ pub struct VaeEnc {
 
 impl VaeEnc {
     pub fn load(path: &str, dev: &Device) -> Result<Self> {
-        let wt = Weights::open(path)?;
+        let wt = open(path)?;
         let e = "encoder";
         let mut steps = vec![];
         let mut i = 0;
@@ -331,5 +387,50 @@ impl VaeEnc {
         let moments = self.quant.forward(&x)?; // [b, 32, h, w]: mean, logvar
         let mu = moments.narrow(1, 0, 16)?.to_dtype(DType::F32)?;
         Ok(mu.broadcast_sub(&self.mean)?.broadcast_div(&self.std)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::diffusers_name;
+
+    #[test]
+    fn wan_vae_names_map_to_diffusers() {
+        for (wan, diffusers) in [
+            ("conv1.bias", "quant_conv.bias"),
+            ("conv2.weight", "post_quant_conv.weight"),
+            ("decoder.conv1.weight", "decoder.conv_in.weight"),
+            ("decoder.head.0.gamma", "decoder.norm_out.gamma"),
+            ("decoder.head.2.bias", "decoder.conv_out.bias"),
+            ("decoder.middle.0.residual.0.gamma", "decoder.mid_block.resnets.0.norm1.gamma"),
+            ("decoder.middle.1.to_qkv.bias", "decoder.mid_block.attentions.0.to_qkv.bias"),
+            ("decoder.middle.2.residual.6.weight", "decoder.mid_block.resnets.1.conv2.weight"),
+            ("decoder.upsamples.0.residual.2.bias", "decoder.up_blocks.0.resnets.0.conv1.bias"),
+            ("decoder.upsamples.3.time_conv.bias", "decoder.up_blocks.0.upsamplers.0.time_conv.bias"),
+            ("decoder.upsamples.4.shortcut.weight", "decoder.up_blocks.1.resnets.0.conv_shortcut.weight"),
+            ("decoder.upsamples.11.resample.1.weight", "decoder.up_blocks.2.upsamplers.0.resample.1.weight"),
+            ("decoder.upsamples.14.residual.6.weight", "decoder.up_blocks.3.resnets.2.conv2.weight"),
+            ("encoder.downsamples.3.residual.3.gamma", "encoder.down_blocks.3.norm2.gamma"),
+            ("encoder.downsamples.10.residual.2.weight", "encoder.down_blocks.10.conv1.weight"),
+        ] {
+            assert_eq!(diffusers_name(wan), diffusers, "{wan}");
+        }
+    }
+
+    /// Both downloads of the VAE give the loader the same tensors:
+    /// `KREA2_VAE_WAN=<ComfyUI qwen_image_vae.safetensors> KREA2_VAE=<diffusers file> cargo test -p dotsmith-engine --release -- --ignored same_vae`
+    #[test]
+    #[ignore = "needs both VAE files on disk"]
+    fn same_vae_in_both_layouts() {
+        let (Ok(wan), Ok(diffusers)) = (std::env::var("KREA2_VAE_WAN"), std::env::var("KREA2_VAE")) else { return };
+        let (a, b) = (super::open(&wan).unwrap(), super::open(&diffusers).unwrap());
+        let dev = candle_core::Device::Cpu;
+        assert_eq!(a.entries.len(), b.entries.len());
+        for k in b.entries.keys() {
+            let (x, y) = (a.tensor_f32(k, &dev).unwrap_or_else(|_| panic!("{k} missing")), b.tensor_f32(k, &dev).unwrap());
+            assert_eq!(x.dims(), y.dims(), "{k}");
+            let diff = (x - y).unwrap().abs().unwrap().max_all().unwrap().to_scalar::<f32>().unwrap();
+            assert_eq!(diff, 0.0, "{k}");
+        }
     }
 }

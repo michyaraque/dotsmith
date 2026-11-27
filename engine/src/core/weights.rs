@@ -145,6 +145,12 @@ impl Weights {
         Ok((self.base + e.start, self.base + e.end))
     }
 
+    /// Give every tensor the name `f` returns (a checkpoint in another layout than the one a loader reads).
+    pub fn rename(&mut self, f: impl Fn(&str) -> String) {
+        self.entries = std::mem::take(&mut self.entries).into_iter().map(|(k, e)| (f(&k), e)).collect();
+        self.ggml = std::mem::take(&mut self.ggml).into_iter().map(|(k, t)| (f(&k), t)).collect();
+    }
+
     /// Start reading the tensors that pass `keep` into the OS file cache in the background (see `prefetch`).
     pub fn prefetch_where(&self, keep: impl Fn(&str) -> bool) {
         prefetch(&self.path, self.ranges_where(keep));
