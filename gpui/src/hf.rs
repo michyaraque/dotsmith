@@ -391,6 +391,30 @@ pub fn check_token(token: Option<&str>, files: &[(String, String)]) -> TokenRepo
 }
 
 #[cfg(test)]
+mod catalog_tests {
+    use dotsmith_engine::model::Family;
+
+    /// Every file a model needs by default downloads with no license to accept, so each variant installs without a
+    /// token; only the optional precision alternatives (bf16 ...) may sit in a gated repo.
+    #[test]
+    #[ignore = "network: asks Hugging Face about every repo in the catalog"]
+    fn default_files_need_no_license() {
+        let agent = super::agent();
+        let mut gated = vec![];
+        for f in Family::ALL {
+            for c in dotsmith_engine::locations::resolve(f).into_iter().filter(|c| c.precision.is_none()) {
+                let Some(src) = c.source else { continue };
+                let v: serde_json::Value = super::get(&agent, &format!("https://huggingface.co/api/models/{}", src.repo), None).unwrap().into_json().unwrap();
+                if v["gated"].as_bool().unwrap_or(v["gated"].is_string()) {
+                    gated.push(format!("{} {} <- {}", f.id(), c.file, src.repo));
+                }
+            }
+        }
+        assert!(gated.is_empty(), "default files behind a license: {gated:#?}");
+    }
+}
+
+#[cfg(test)]
 mod token_tests {
     /// Against huggingface.co: `HF_TOKEN=... cargo test --release checks_a_token -- --ignored --nocapture`.
     #[test]
